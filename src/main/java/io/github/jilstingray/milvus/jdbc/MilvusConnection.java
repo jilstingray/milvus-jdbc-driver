@@ -17,6 +17,7 @@ import java.util.Properties;
 
 final class MilvusConnection implements AutoCloseable {
     static final long DEFAULT_QUERY_LIMIT = 16384;
+    static final ConsistencyLevel DEFAULT_CONSISTENCY_LEVEL = ConsistencyLevel.STRONG;
     private final String jdbcUrl;
     private final Properties properties;
     private final MilvusClientV2 client;
@@ -91,9 +92,13 @@ final class MilvusConnection implements AutoCloseable {
     }
 
     ConsistencyLevel consistencyLevel() {
+        return parseConsistencyLevel(properties);
+    }
+
+    static ConsistencyLevel parseConsistencyLevel(Properties properties) {
         String value = properties.getProperty("consistencyLevel");
         if (value == null || value.isBlank()) {
-            return null;
+            return DEFAULT_CONSISTENCY_LEVEL;
         }
         return ConsistencyLevel.valueOf(value.trim().toUpperCase(Locale.ROOT));
     }

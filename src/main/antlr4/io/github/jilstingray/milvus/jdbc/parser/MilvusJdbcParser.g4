@@ -47,7 +47,7 @@ revoke: REVOKE ROLE roleName=identifier FROM userName=identifier | REVOKE privil
 showDatabases: SHOW DATABASES;
 showCollections: SHOW COLLECTIONS;
 showTables: SHOW TABLES;
-describeCollection: (DESCRIBE | DESC) COLLECTION? collectionName=identifier | SHOW TABLE collectionName=identifier;
+describeCollection: (DESCRIBE | DESC) (COLLECTION | TABLE)? collectionName=identifier | SHOW TABLE collectionName=identifier;
 showCreateTable: SHOW CREATE TABLE collectionName=identifier;
 showPartitions: SHOW PARTITIONS FROM TABLE? collectionName=identifier;
 showPartition: SHOW PARTITION partitionName=identifier ON TABLE? collectionName=identifier;

@@ -43,7 +43,7 @@ public final class MilvusDriver implements Driver {
                 new DriverPropertyInfo("password", null),
                 new DriverPropertyInfo("token", null),
                 new DriverPropertyInfo("database", null),
-                new DriverPropertyInfo("consistencyLevel", "BOUNDED")
+                new DriverPropertyInfo("consistencyLevel", "STRONG")
         };
     }
 

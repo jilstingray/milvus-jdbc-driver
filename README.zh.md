@@ -37,6 +37,8 @@ Connection conn = DriverManager.getConnection(
 
 - `database` 是必填项。一个连接只绑定一个 Milvus database；catalog、schema、table 等元数据也只暴露当前连接的 database。如果需要浏览多个 database，请分别创建连接。
 
+- `consistencyLevel` 控制 query 和 search 请求使用的一致性级别。默认值为 `STRONG`。
+
 - `defaultQueryLimit` 用于控制没有显式 `LIMIT` 的标量 `SELECT` 自动追加的 `LIMIT` 值。默认值为 `16384`，可配置范围为 `1` 到 `16384`。
 
 ### 离线 Jar
@@ -85,7 +87,7 @@ Milvus 官方术语可参考：[数据库](https://milvus.io/docs/zh/manage_data
 
 需要注意的差异：
 
-- 支持 `DESCRIBE COLLECTION name`，也支持 `SHOW TABLE name`，但当前语法不支持 `DESCRIBE TABLE name`。
+- `DESCRIBE name`、`DESCRIBE COLLECTION name`、`DESCRIBE TABLE name`、`DESC TABLE name` 和 `SHOW TABLE name` 都用于描述 Milvus collection。
 - `SELECT`、`INSERT`、`UPSERT`、`COUNT`、`FLUSH`、`UPDATE` 直接使用对象名，例如 `SELECT * FROM books`；这些语句不会在 `FROM` 后使用 `TABLE` 或 `COLLECTION` 关键字。
 - `database.collection` 这样的两段式引用表示 `Milvus database + collection`，不是 `schema.table`。database 前缀必须与当前 JDBC 连接绑定的 database 一致。
 - 不支持 `database.schema.table` 这种三段式关系型名称，因为 Milvus 没有独立的关系型 schema 命名空间。
@@ -100,16 +102,18 @@ Milvus 官方术语可参考：[数据库](https://milvus.io/docs/zh/manage_data
 - Aliases：`CREATE/ALTER/DROP ALIAS`
 - Indexes：`CREATE/DROP INDEX`、`SHOW INDEX(ES)`
 - RBAC：`CREATE/DROP USER`、`CREATE/DROP ROLE`、`GRANT/REVOKE ROLE`、`GRANT/REVOKE privilege`
-- Data：`INSERT`、`UPSERT`、`DELETE`、`COUNT`、标量 `SELECT`、向量搜索 `SELECT ... ORDER BY vector <-> [...]`
+- Data：`INSERT`、`UPSERT`、`UPDATE`、`DELETE`、`COUNT`、标量 `SELECT`、向量搜索 `SELECT ... ORDER BY vector <-> [...]`
 - Memory/control：`LOAD TABLE`、`RELEASE TABLE`、`FLUSH`
 
 示例：
 
 - `SHOW COLLECTIONS`
 - `DESCRIBE COLLECTION collection_name`
+- `DESCRIBE TABLE collection_name`
 - `CREATE COLLECTION collection_name DIMENSION 768`
 - `DROP COLLECTION collection_name`
 - `INSERT INTO collection_name (id, vector, name) VALUES (1, [0.1, 0.2], 'a')`
+- `UPDATE collection_name SET name = 'b' WHERE id = 1 LIMIT 1`
 - `DELETE FROM collection_name WHERE id = 1`
 - `SELECT 'keep alive'`
 - `SELECT * FROM collection_name`
@@ -119,4 +123,6 @@ Milvus 官方术语可参考：[数据库](https://milvus.io/docs/zh/manage_data
 
 没有显式 `LIMIT` 的标量 `SELECT` 默认使用连接的 `defaultQueryLimit` 值，因为 Milvus 对空表达式查询要求提供 limit。向量搜索会把 `ORDER BY vector <-> [...]` 映射为 SDK search 调用；标量 `SELECT` 映射为 query。
 
-`IMPORT` / BulkWriter / MinIO 文件导入命令，以及 `SHOW PROGRESS`、`SHOW GRANTS`、`UPDATE` 目前不受支持。其中后三者可以被解析，但会返回 `SQLFeatureNotSupportedException`。
+`UPDATE` 的标量查询更新必须带 `WHERE` 条件，不能更新主键字段，并支持 `UPDATE ... ORDER BY vector <-> [...] LIMIT ...` 向量搜索更新。如果标量查询更新没有显式 `LIMIT`，驱动会先统计匹配数量，超过 `defaultQueryLimit` 时会拒绝执行。标量字段更新使用 Milvus partial upsert。向量字段更新使用完整行 upsert：驱动会查询匹配实体，把 `SET` 值合并到原实体中，再 upsert 完整行，以确保向量替换可靠持久化。
+
+`IMPORT` / BulkWriter / MinIO 文件导入命令，以及 `SHOW PROGRESS`、`SHOW GRANTS` 目前不受支持。后两者可以被解析，但会返回 `SQLFeatureNotSupportedException`。

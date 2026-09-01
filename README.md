@@ -37,6 +37,8 @@ Supported URL query parameters and connection properties: `user`, `username`, `p
 
 - The `database` is required. A connection is bound to one Milvus database; metadata such as catalogs, schemas, and tables only exposes the database of the current connection. Create separate connections if you need to browse multiple databases.
 
+- `consistencyLevel` controls the consistency level used by query and search requests. The default is `STRONG`.
+
 - `defaultQueryLimit` controls the `LIMIT` value automatically appended to scalar `SELECT` statements without an explicit `LIMIT`. The default is `16384`, and the configurable range is `1` to `16384`.
 
 ### Offline Jar
@@ -85,7 +87,7 @@ Equivalent or near-equivalent forms:
 
 Important differences:
 
-- `DESCRIBE COLLECTION name` is supported, and `SHOW TABLE name` is also supported, but the current grammar does not support `DESCRIBE TABLE name`.
+- `DESCRIBE name`, `DESCRIBE COLLECTION name`, `DESCRIBE TABLE name`, `DESC TABLE name`, and `SHOW TABLE name` all describe a Milvus collection.
 - `SELECT`, `INSERT`, `UPSERT`, `COUNT`, `FLUSH`, and `UPDATE` use object names directly, for example `SELECT * FROM books`; these statements do not use the `TABLE` or `COLLECTION` keyword after `FROM`.
 - A two-part reference such as `database.collection` means `Milvus database + collection`, not `schema.table`. The database prefix must match the database bound to the current JDBC connection.
 - Three-part relational names such as `database.schema.table` are not supported because Milvus has no independent relational schema namespace.
@@ -100,16 +102,18 @@ Command categories:
 - Aliases: `CREATE/ALTER/DROP ALIAS`
 - Indexes: `CREATE/DROP INDEX`, `SHOW INDEX(ES)`
 - RBAC: `CREATE/DROP USER`, `CREATE/DROP ROLE`, `GRANT/REVOKE ROLE`, `GRANT/REVOKE privilege`
-- Data: `INSERT`, `UPSERT`, `DELETE`, `COUNT`, scalar `SELECT`, vector search `SELECT ... ORDER BY vector <-> [...]`
+- Data: `INSERT`, `UPSERT`, `UPDATE`, `DELETE`, `COUNT`, scalar `SELECT`, vector search `SELECT ... ORDER BY vector <-> [...]`
 - Memory/control: `LOAD TABLE`, `RELEASE TABLE`, `FLUSH`
 
 Examples:
 
 - `SHOW COLLECTIONS`
 - `DESCRIBE COLLECTION collection_name`
+- `DESCRIBE TABLE collection_name`
 - `CREATE COLLECTION collection_name DIMENSION 768`
 - `DROP COLLECTION collection_name`
 - `INSERT INTO collection_name (id, vector, name) VALUES (1, [0.1, 0.2], 'a')`
+- `UPDATE collection_name SET name = 'b' WHERE id = 1 LIMIT 1`
 - `DELETE FROM collection_name WHERE id = 1`
 - `SELECT 'keep alive'`
 - `SELECT * FROM collection_name`
@@ -119,4 +123,6 @@ Examples:
 
 Scalar `SELECT` statements without an explicit `LIMIT` use the connection's `defaultQueryLimit`, because Milvus requires a limit for empty-expression queries. Vector search maps `ORDER BY vector <-> [...]` to an SDK search call; scalar `SELECT` maps to query.
 
-`IMPORT` / BulkWriter / MinIO file import commands, as well as `SHOW PROGRESS`, `SHOW GRANTS`, and `UPDATE`, are not currently supported. The latter three can be parsed, but return `SQLFeatureNotSupportedException`.
+`UPDATE` requires a `WHERE` filter for scalar-query updates, cannot update the primary key field, and supports vector-search updates with `UPDATE ... ORDER BY vector <-> [...] LIMIT ...`. Without an explicit `LIMIT`, scalar-query updates first count matches and refuse to update more than `defaultQueryLimit` rows. Scalar-field updates use Milvus partial upsert. Vector-field updates use a full-row upsert: the driver queries the matched entities, merges the `SET` values into those entities, and upserts the complete rows so vector replacements are persisted reliably.
+
+`IMPORT` / BulkWriter / MinIO file import commands, as well as `SHOW PROGRESS` and `SHOW GRANTS`, are not currently supported. The latter two can be parsed, but return `SQLFeatureNotSupportedException`.

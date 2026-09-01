@@ -59,6 +59,7 @@ import org.antlr.v4.runtime.CharStreams;
 import org.antlr.v4.runtime.CommonTokenStream;
 import org.antlr.v4.runtime.RecognitionException;
 import org.antlr.v4.runtime.Recognizer;
+import org.antlr.v4.runtime.Token;
 import org.antlr.v4.runtime.TokenStream;
 
 import java.sql.SQLException;
@@ -292,6 +293,189 @@ final class SqlExecutor {
         return QueryResult.update(resp.getUpsertCnt());
     }
 
+    private QueryResult update(String collection, String partition, Map<String, Object> updates, UpdateTarget target)
+        throws SQLException {
+        if (!target.isVectorSearch() && (target.filter == null || target.filter.isBlank())) {
+            throw new SQLException("UPDATE requires a WHERE filter");
+        }
+        if (updates.isEmpty()) {
+            throw new SQLException("UPDATE requires at least one SET assignment");
+        }
+
+        DescribeCollectionResp description;
+        try {
+            description = describe(collection);
+        } catch (RuntimeException e) {
+            throw new SQLException("Failed to describe collection '" + collection + "' for UPDATE", e);
+        }
+        Map<String, CreateCollectionReq.FieldSchema> schemaFields = schemaFields(description);
+        String primaryField = primaryField(description);
+        if (primaryField == null || primaryField.isBlank()) {
+            throw new SQLException("Cannot UPDATE collection '" + collection + "' because its primary key field is unknown");
+        }
+        CreateCollectionReq.FieldSchema primarySchema = schemaFields.get(primaryField);
+        boolean dynamicFields = Boolean.TRUE.equals(description.getEnableDynamicField());
+        for (String field : updates.keySet()) {
+            CreateCollectionReq.FieldSchema schema = schemaFields.get(field);
+            if (primaryField.equals(field) || (schema != null && Boolean.TRUE.equals(schema.getIsPrimaryKey()))) {
+                throw new SQLException("Cannot UPDATE primary key field '" + field + "'");
+            }
+            if (schema == null && !dynamicFields) {
+                throw new SQLException("Cannot UPDATE unknown field '" + field + "' on collection '" + collection + "'");
+            }
+        }
+
+        if (target.isVectorSearch()) {
+            return updateByVectorSearch(collection, partition, updates, schemaFields, primaryField, target);
+        }
+
+        long queryLimit = queryLimit(collection, partition, target);
+        if (queryLimit == 0) {
+            return QueryResult.update(0);
+        }
+
+        if (updatesVectorField(updates, schemaFields)) {
+            return updateByFullRowQuery(collection, partition, updates, schemaFields, primaryField, target.filter, queryLimit);
+        }
+
+        List<Object> ids = queryPrimaryKeys(collection, partition, primaryField, target.filter, queryLimit);
+        if (ids.isEmpty()) {
+            return QueryResult.update(0);
+        }
+
+        List<JsonObject> rows = new ArrayList<>();
+        for (Object id : ids) {
+            JsonObject row = new JsonObject();
+            row.add(primaryField, toJson(id, primarySchema));
+            for (Map.Entry<String, Object> entry : updates.entrySet()) {
+                row.add(entry.getKey(), toJson(entry.getValue(), schemaFields.get(entry.getKey())));
+            }
+            rows.add(row);
+        }
+
+        List<UpsertReq.FieldPartialUpdateOp> fieldOps = new ArrayList<>();
+        for (String field : updates.keySet()) {
+            fieldOps.add(UpsertReq.FieldPartialUpdateOp.builder()
+                .fieldName(field)
+                .opType(UpsertReq.FieldPartialUpdateOp.OpType.REPLACE)
+                .build());
+        }
+
+        UpsertReq.UpsertReqBuilder builder = UpsertReq.builder()
+            .databaseName(connection.database())
+            .collectionName(collection)
+            .data(rows)
+            .partialUpdate(true)
+            .fieldOps(fieldOps);
+        if (partition != null) {
+            builder.partitionName(partition);
+        }
+        UpsertResp resp;
+        try {
+            resp = connection.client().upsert(builder.build());
+        } catch (RuntimeException e) {
+            throw new SQLException("Milvus partial upsert failed while executing UPDATE on collection '" + collection + "'", e);
+        }
+        return QueryResult.update(resp.getUpsertCnt());
+    }
+
+    private long queryLimit(String collection, String partition, UpdateTarget target) throws SQLException {
+        if (target.limit > 0) {
+            return target.limit;
+        }
+        long matched = countMatched(collection, partition, target.filter);
+        if (matched == 0) {
+            return 0;
+        }
+        long maxUpdateRows = connection.defaultQueryLimit();
+        if (matched > maxUpdateRows) {
+            throw new SQLException("UPDATE matched " + matched + " rows, which exceeds defaultQueryLimit " + maxUpdateRows
+                + ". Add LIMIT or narrow the WHERE filter.");
+        }
+        return matched;
+    }
+
+    private QueryResult updateByFullRowQuery(String collection, String partition, Map<String, Object> updates,
+                                             Map<String, CreateCollectionReq.FieldSchema> schemaFields, String primaryField,
+                                             String filter, long limit) throws SQLException {
+        List<Map<String, Object>> matchedRows = queryRowsForUpdate(collection, partition, filter, limit);
+        return updateRowsByFullRowUpsert(collection, partition, updates, schemaFields, primaryField, matchedRows);
+    }
+
+    private QueryResult updateByVectorSearch(String collection, String partition, Map<String, Object> updates,
+                                             Map<String, CreateCollectionReq.FieldSchema> schemaFields, String primaryField,
+                                             UpdateTarget target) throws SQLException {
+        long limit = target.limit > 0 ? target.limit : 10;
+        SearchReq.SearchReqBuilder builder = SearchReq.builder()
+            .databaseName(connection.database())
+            .collectionName(collection)
+            .annsField(target.vectorField)
+            .data(List.of(new FloatVec(toFloatList(target.vectorValue))))
+            .limit(limit)
+            .outputFields(List.of("*"))
+            .filter(filterOrEmpty(target.filter));
+        if (partition != null) {
+            builder.partitionNames(List.of(partition));
+        }
+        ConsistencyLevel level = connection.consistencyLevel();
+        if (level != null) {
+            builder.consistencyLevel(level);
+        }
+        builder.metricType(metricType(target.vectorOperator));
+
+        SearchResp resp;
+        try {
+            resp = connection.client().search(builder.build());
+        } catch (RuntimeException e) {
+            throw new SQLException("Failed to search rows for UPDATE on collection '" + collection + "'", e);
+        }
+        List<Map<String, Object>> matchedRows = new ArrayList<>();
+        for (List<SearchResp.SearchResult> batch : resp.getSearchResults()) {
+            for (SearchResp.SearchResult result : batch) {
+                matchedRows.add(new LinkedHashMap<>(result.getEntity()));
+            }
+        }
+        return updateRowsByFullRowUpsert(collection, partition, updates, schemaFields, primaryField, matchedRows);
+    }
+
+    private QueryResult updateRowsByFullRowUpsert(String collection, String partition, Map<String, Object> updates,
+                                                  Map<String, CreateCollectionReq.FieldSchema> schemaFields, String primaryField,
+                                                  List<Map<String, Object>> matchedRows) throws SQLException {
+        if (matchedRows.isEmpty()) {
+            return QueryResult.update(0);
+        }
+
+        List<JsonObject> rows = new ArrayList<>();
+        for (Map<String, Object> matchedRow : matchedRows) {
+            if (!matchedRow.containsKey(primaryField)) {
+                throw new SQLException("Milvus query did not return primary key field '" + primaryField + "' for UPDATE");
+            }
+            Map<String, Object> merged = new LinkedHashMap<>(matchedRow);
+            merged.putAll(updates);
+
+            JsonObject row = new JsonObject();
+            for (Map.Entry<String, Object> entry : merged.entrySet()) {
+                row.add(entry.getKey(), toJson(entry.getValue(), schemaFields.get(entry.getKey())));
+            }
+            rows.add(row);
+        }
+
+        UpsertReq.UpsertReqBuilder builder = UpsertReq.builder()
+            .databaseName(connection.database())
+            .collectionName(collection)
+            .data(rows);
+        if (partition != null) {
+            builder.partitionName(partition);
+        }
+        UpsertResp resp;
+        try {
+            resp = connection.client().upsert(builder.build());
+        } catch (RuntimeException e) {
+            throw new SQLException("Milvus full-row upsert failed while executing UPDATE on collection '" + collection + "'", e);
+        }
+        return QueryResult.update(resp.getUpsertCnt());
+    }
+
     private QueryResult unsupported(String command) throws SQLException {
         throw new java.sql.SQLFeatureNotSupportedException(command + " is parsed but not implemented by this JDBC driver yet");
     }
@@ -463,6 +647,21 @@ final class SqlExecutor {
             .build());
     }
 
+    private String primaryField(DescribeCollectionResp description) {
+        if (description.getPrimaryFieldName() != null && !description.getPrimaryFieldName().isBlank()) {
+            return description.getPrimaryFieldName();
+        }
+        if (description.getCollectionSchema() == null) {
+            return null;
+        }
+        for (CreateCollectionReq.FieldSchema field : description.getCollectionSchema().getFieldSchemaList()) {
+            if (Boolean.TRUE.equals(field.getIsPrimaryKey())) {
+                return field.getName();
+            }
+        }
+        return null;
+    }
+
     private Map<String, CreateCollectionReq.FieldSchema> schemaFields(DescribeCollectionResp description) {
         Map<String, CreateCollectionReq.FieldSchema> fields = new LinkedHashMap<>();
         if (description.getCollectionSchema() == null) {
@@ -484,6 +683,149 @@ final class SqlExecutor {
             .filter(filter)
             .build());
         return QueryResult.update(resp.getDeleteCnt());
+    }
+
+    private long countMatched(String collection, String partition, String filter) throws SQLException {
+        QueryReq.QueryReqBuilder builder = QueryReq.builder()
+            .databaseName(connection.database())
+            .collectionName(collection)
+            .outputFields(List.of("count(*)"))
+            .filter(filter);
+        if (partition != null) {
+            builder.partitionNames(List.of(partition));
+        }
+        ConsistencyLevel level = connection.consistencyLevel();
+        if (level != null) {
+            builder.consistencyLevel(level);
+        }
+        QueryResp resp;
+        try {
+            resp = connection.client().query(builder.build());
+        } catch (RuntimeException e) {
+            throw new SQLException("Failed to count rows for UPDATE on collection '" + collection + "'", e);
+        }
+        if (resp.getQueryResults().isEmpty()) {
+            return 0;
+        }
+        Map<String, Object> entity = resp.getQueryResults().get(0).getEntity();
+        Object count = entity.get("count(*)");
+        if (count == null && !entity.isEmpty()) {
+            count = entity.values().iterator().next();
+        }
+        if (count instanceof Number) {
+            return ((Number) count).longValue();
+        }
+        if (count != null) {
+            try {
+                return Long.parseLong(String.valueOf(count));
+            } catch (NumberFormatException e) {
+                throw new SQLException("Milvus returned a non-numeric UPDATE match count: " + count, e);
+            }
+        }
+        return 0;
+    }
+
+    private List<Object> queryPrimaryKeys(String collection, String partition, String primaryField, String filter, long limit)
+        throws SQLException {
+        if (limit <= 0) {
+            return List.of();
+        }
+        QueryReq.QueryReqBuilder builder = QueryReq.builder()
+            .databaseName(connection.database())
+            .collectionName(collection)
+            .outputFields(List.of(primaryField))
+            .filter(filter)
+            .limit(limit);
+        if (partition != null) {
+            builder.partitionNames(List.of(partition));
+        }
+        ConsistencyLevel level = connection.consistencyLevel();
+        if (level != null) {
+            builder.consistencyLevel(level);
+        }
+        QueryResp resp;
+        try {
+            resp = connection.client().query(builder.build());
+        } catch (RuntimeException e) {
+            throw new SQLException("Failed to query primary keys for UPDATE on collection '" + collection + "'", e);
+        }
+        List<Object> ids = new ArrayList<>();
+        for (QueryResp.QueryResult result : resp.getQueryResults()) {
+            Map<String, Object> entity = result.getEntity();
+            if (!entity.containsKey(primaryField)) {
+                throw new SQLException("Milvus query did not return primary key field '" + primaryField + "' for UPDATE");
+            }
+            ids.add(entity.get(primaryField));
+        }
+        return ids;
+    }
+
+    private List<Map<String, Object>> queryRowsForUpdate(String collection, String partition, String filter, long limit)
+        throws SQLException {
+        if (limit <= 0) {
+            return List.of();
+        }
+        QueryReq.QueryReqBuilder builder = QueryReq.builder()
+            .databaseName(connection.database())
+            .collectionName(collection)
+            .outputFields(List.of("*"))
+            .filter(filter)
+            .limit(limit);
+        if (partition != null) {
+            builder.partitionNames(List.of(partition));
+        }
+        ConsistencyLevel level = connection.consistencyLevel();
+        if (level != null) {
+            builder.consistencyLevel(level);
+        }
+        QueryResp resp;
+        try {
+            resp = connection.client().query(builder.build());
+        } catch (RuntimeException e) {
+            throw new SQLException("Failed to query rows for UPDATE on collection '" + collection + "'", e);
+        }
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (QueryResp.QueryResult result : resp.getQueryResults()) {
+            rows.add(new LinkedHashMap<>(result.getEntity()));
+        }
+        return rows;
+    }
+
+    private boolean updatesVectorField(Map<String, Object> updates, Map<String, CreateCollectionReq.FieldSchema> schemaFields) {
+        for (String field : updates.keySet()) {
+            CreateCollectionReq.FieldSchema schema = schemaFields.get(field);
+            if (schema != null && isVectorType(schema.getDataType())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static IndexParam.MetricType metricType(String vectorOperator) {
+        if ("<=>".equals(vectorOperator)) {
+            return IndexParam.MetricType.COSINE;
+        }
+        if ("<#>".equals(vectorOperator)) {
+            return IndexParam.MetricType.IP;
+        }
+        return IndexParam.MetricType.L2;
+    }
+
+    private static boolean isVectorType(DataType type) {
+        if (type == null) {
+            return false;
+        }
+        switch (type) {
+            case BinaryVector:
+            case FloatVector:
+            case Float16Vector:
+            case BFloat16Vector:
+            case SparseFloatVector:
+            case Int8Vector:
+                return true;
+            default:
+                return false;
+        }
     }
 
     private QueryResult select(String collection, List<String> outputFields, SelectTail parsed) throws SQLException {
@@ -651,12 +993,24 @@ final class SqlExecutor {
             case Int8:
             case Int16:
             case Int32:
+                if (!(value instanceof Number)) {
+                    throw new SQLException("Value for field '" + field.getName() + "' must be numeric");
+                }
                 return toJson(((Number) value).intValue());
             case Int64:
+                if (!(value instanceof Number)) {
+                    throw new SQLException("Value for field '" + field.getName() + "' must be numeric");
+                }
                 return toJson(((Number) value).longValue());
             case Float:
+                if (!(value instanceof Number)) {
+                    throw new SQLException("Value for field '" + field.getName() + "' must be numeric");
+                }
                 return toJson(((Number) value).floatValue());
             case Double:
+                if (!(value instanceof Number)) {
+                    throw new SQLException("Value for field '" + field.getName() + "' must be numeric");
+                }
                 return toJson(((Number) value).doubleValue());
             case FloatVector:
                 return toJson(toFloatList(value));
@@ -698,6 +1052,25 @@ final class SqlExecutor {
             return null;
         }
         return tokens.getText(ctx.getSourceInterval());
+    }
+
+    static String filterText(TokenStream tokens, org.antlr.v4.runtime.ParserRuleContext ctx) {
+        if (ctx == null) {
+            return null;
+        }
+        StringBuilder text = new StringBuilder();
+        for (int i = ctx.getSourceInterval().a; i <= ctx.getSourceInterval().b; i++) {
+            Token token = tokens.get(i);
+            if (token.getType() == Token.EOF) {
+                break;
+            }
+            String tokenText = token.getType() == MilvusJdbcParser.EQUALS ? "==" : token.getText();
+            if (text.length() > 0) {
+                text.append(' ');
+            }
+            text.append(tokenText);
+        }
+        return text.toString();
     }
 
     private CollectionRef collectionRef(String name) throws SQLException {
@@ -847,7 +1220,10 @@ final class SqlExecutor {
 
         @Override
         public QueryResult visitCount(MilvusJdbcParser.CountContext ctx) {
-            return unchecked(() -> count(identifier(ctx.collectionName), tokenText(tokens, ctx.expression())));
+            return unchecked(() -> {
+                CollectionRef source = collectionRef(identifier(ctx.collectionName));
+                return count(source.collection, filterText(tokens, ctx.expression()));
+            });
         }
 
         @Override
@@ -892,7 +1268,32 @@ final class SqlExecutor {
 
         @Override
         public QueryResult visitUpdate(MilvusJdbcParser.UpdateContext ctx) {
-            return unchecked(() -> unsupported("UPDATE"));
+            Map<String, Object> updates = new LinkedHashMap<>();
+            for (MilvusJdbcParser.SetClauseContext setClause : ctx.setClauseList().setClause()) {
+                String field = identifier(setClause.columnName);
+                if (updates.containsKey(field)) {
+                    return unchecked(() -> {
+                        throw new SQLException("Duplicate UPDATE assignment for field '" + field + "'");
+                    });
+                }
+                updates.put(field, termValue(setClause.value));
+            }
+            return unchecked(() -> {
+                CollectionRef source = collectionRef(identifier(ctx.collectionName));
+                UpdateTarget target = new UpdateTarget(
+                    filterText(tokens, ctx.expression()),
+                    ctx.limit == null ? -1 : Long.parseLong(ctx.limit.getText())
+                );
+                if (ctx.sortClause() != null) {
+                    if (ctx.sortClause().distanceOperator() == null) {
+                        throw new SQLException("UPDATE ORDER BY requires a vector distance operator");
+                    }
+                    target.vectorField = identifier(ctx.sortClause().fieldName);
+                    target.vectorOperator = ctx.sortClause().distanceOperator().getText();
+                    target.vectorValue = literal(ctx.sortClause().vectorValue().listLiteral());
+                }
+                return update(source.collection, ctx.partitionName == null ? null : identifier(ctx.partitionName), updates, target);
+            });
         }
 
 
@@ -961,7 +1362,10 @@ final class SqlExecutor {
 
         @Override
         public QueryResult visitDelete(MilvusJdbcParser.DeleteContext ctx) {
-            return unchecked(() -> delete(identifier(ctx.collectionName), tokenText(tokens, ctx.expression())));
+            return unchecked(() -> {
+                CollectionRef source = collectionRef(identifier(ctx.collectionName));
+                return delete(source.collection, filterText(tokens, ctx.expression()));
+            });
         }
 
         @Override
@@ -970,7 +1374,7 @@ final class SqlExecutor {
                 return constantSelect(ctx.constantSelectElements());
             }
             SelectTail tail = new SelectTail(
-                tokenText(tokens, ctx.expression()),
+                filterText(tokens, ctx.expression()),
                 ctx.limit == null ? -1 : Long.parseLong(ctx.limit.getText()),
                 null,
                 null,
@@ -1173,6 +1577,16 @@ final class SqlExecutor {
             return identifier(ctx.identifier());
         }
 
+        private Object termValue(MilvusJdbcParser.TermContext ctx) {
+            if (ctx.literal() != null) {
+                return literal(ctx.literal());
+            }
+            if (ctx.identifier() != null) {
+                return identifier(ctx.identifier());
+            }
+            throw new IllegalArgumentException("Unbound UPDATE parameter: " + ctx.getText());
+        }
+
         private Object number(MilvusJdbcParser.SignedNumberContext ctx) {
             String text = ctx.getText();
             if (ctx.INTEGER() != null) {
@@ -1217,6 +1631,23 @@ final class SqlExecutor {
         ParsedSql(TokenStream tokens, MilvusJdbcParser.RootContext root) {
             this.tokens = tokens;
             this.root = root;
+        }
+    }
+
+    private static final class UpdateTarget {
+        private final String filter;
+        private final long limit;
+        private String vectorField;
+        private String vectorOperator;
+        private Object vectorValue;
+
+        private UpdateTarget(String filter, long limit) {
+            this.filter = filter;
+            this.limit = limit;
+        }
+
+        private boolean isVectorSearch() {
+            return vectorField != null;
         }
     }
 

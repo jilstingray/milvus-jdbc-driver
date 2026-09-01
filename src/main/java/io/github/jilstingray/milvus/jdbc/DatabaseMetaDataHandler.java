@@ -50,13 +50,15 @@ final class DatabaseMetaDataHandler implements InvocationHandler {
             case "getConnection":
                 return JdbcProxy.connection(connection);
             case "getTables":
-                return JdbcProxy.resultSet(tables((String) args[2]));
+                return JdbcProxy.resultSet(tables((String) args[0], (String) args[2]));
             case "getColumns":
-                return JdbcProxy.resultSet(columns((String) args[2], (String) args[3]), columnMetadataColumns());
+                return JdbcProxy.resultSet(columns((String) args[0], (String) args[2], (String) args[3]), columnMetadataColumns());
             case "getCatalogs":
-                return JdbcProxy.resultSet(List.of(row("TABLE_CAT", connection.database())));
+                return JdbcProxy.resultSet(catalogs());
             case "getSchemas":
-                return JdbcProxy.resultSet(List.of(row("TABLE_SCHEM", connection.database(), "TABLE_CATALOG", connection.database())));
+                return args == null
+                    ? JdbcProxy.resultSet(schemas(null, null))
+                    : JdbcProxy.resultSet(schemas((String) args[0], (String) args[1]));
             case "supportsTransactions":
                 return false;
             case "getDefaultTransactionIsolation":
@@ -89,70 +91,110 @@ final class DatabaseMetaDataHandler implements InvocationHandler {
         }
     }
 
-    private QueryResult tables(String tableNamePattern) throws SQLException {
-        QueryResult listed = connection.executor().showCollections();
+    private QueryResult catalogs() throws SQLException {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (Map<String, Object> table : listed.rows()) {
-            String name = String.valueOf(table.get("TABLE_NAME"));
-            if (matches(name, tableNamePattern)) {
-                rows.add(table);
+        for (String database : allDatabases()) {
+            rows.add(row("TABLE_CAT", database));
+        }
+        return QueryResult.rows(rows);
+    }
+
+    private QueryResult schemas(String catalog, String schemaPattern) throws SQLException {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (String database : databases(catalog)) {
+            if (matches(database, schemaPattern)) {
+                rows.add(row("TABLE_SCHEM", database, "TABLE_CATALOG", database));
+            }
+        }
+        return QueryResult.rows(rows);
+    }
+
+    private QueryResult tables(String catalog, String tableNamePattern) throws SQLException {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (String database : databases(catalog)) {
+            QueryResult listed = connection.executor().showCollections(database);
+            for (Map<String, Object> table : listed.rows()) {
+                String name = String.valueOf(table.get("TABLE_NAME"));
+                if (matches(name, tableNamePattern)) {
+                    rows.add(table);
+                }
             }
         }
         return QueryResult.rows(rows, tableColumns());
     }
 
-    private List<Map<String, Object>> columns(String tableNamePattern, String columnNamePattern) throws SQLException {
+    private List<Map<String, Object>> columns(String catalog, String tableNamePattern, String columnNamePattern) throws SQLException {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (Map<String, Object> table : connection.executor().showCollections().rows()) {
-            String tableName = String.valueOf(table.get("TABLE_NAME"));
-            if (!matches(tableName, tableNamePattern)) {
-                continue;
-            }
-            DescribeCollectionResp description = connection.client().describeCollection(DescribeCollectionReq.builder()
-                    .databaseName(connection.database())
-                    .collectionName(tableName)
-                    .build());
-            CreateCollectionReq.CollectionSchema schema = description.getCollectionSchema();
-            if (schema == null) {
-                continue;
-            }
-            int ordinal = 1;
-            for (CreateCollectionReq.FieldSchema field : schema.getFieldSchemaList()) {
-                if (!matches(field.getName(), columnNamePattern)) {
-                    ordinal++;
+        for (String database : databases(catalog)) {
+            for (Map<String, Object> table : connection.executor().showCollections(database).rows()) {
+                String tableName = String.valueOf(table.get("TABLE_NAME"));
+                if (!matches(tableName, tableNamePattern)) {
                     continue;
                 }
-                JdbcType jdbcType = jdbcType(field);
-                Map<String, Object> row = new LinkedHashMap<>();
-                row.put("TABLE_CAT", connection.database());
-                row.put("TABLE_SCHEM", connection.database());
-                row.put("TABLE_NAME", tableName);
-                row.put("COLUMN_NAME", field.getName());
-                row.put("DATA_TYPE", jdbcType.type);
-                row.put("TYPE_NAME", jdbcType.name);
-                row.put("COLUMN_SIZE", columnSize(field));
-                row.put("BUFFER_LENGTH", null);
-                row.put("DECIMAL_DIGITS", decimalDigits(field));
-                row.put("NUM_PREC_RADIX", 10);
-                row.put("NULLABLE", Boolean.TRUE.equals(field.getIsNullable()) ? DatabaseMetaData.columnNullable : DatabaseMetaData.columnNoNulls);
-                row.put("REMARKS", field.getDescription());
-                row.put("COLUMN_DEF", field.getDefaultValue() == null ? null : String.valueOf(field.getDefaultValue()));
-                row.put("SQL_DATA_TYPE", null);
-                row.put("SQL_DATETIME_SUB", null);
-                row.put("CHAR_OCTET_LENGTH", field.getMaxLength());
-                row.put("ORDINAL_POSITION", ordinal);
-                row.put("IS_NULLABLE", Boolean.TRUE.equals(field.getIsNullable()) ? "YES" : "NO");
-                row.put("SCOPE_CATALOG", null);
-                row.put("SCOPE_SCHEMA", null);
-                row.put("SCOPE_TABLE", null);
-                row.put("SOURCE_DATA_TYPE", null);
-                row.put("IS_AUTOINCREMENT", Boolean.TRUE.equals(field.getAutoID()) ? "YES" : "NO");
-                row.put("IS_GENERATEDCOLUMN", Boolean.TRUE.equals(field.getIsFunctionOutput()) ? "YES" : "NO");
-                rows.add(row);
-                ordinal++;
+                DescribeCollectionResp description = connection.client().describeCollection(DescribeCollectionReq.builder()
+                        .databaseName(database)
+                        .collectionName(tableName)
+                        .build());
+                CreateCollectionReq.CollectionSchema schema = description.getCollectionSchema();
+                if (schema == null) {
+                    continue;
+                }
+                int ordinal = 1;
+                for (CreateCollectionReq.FieldSchema field : schema.getFieldSchemaList()) {
+                    if (!matches(field.getName(), columnNamePattern)) {
+                        ordinal++;
+                        continue;
+                    }
+                    JdbcType jdbcType = jdbcType(field);
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("TABLE_CAT", database);
+                    row.put("TABLE_SCHEM", database);
+                    row.put("TABLE_NAME", tableName);
+                    row.put("COLUMN_NAME", field.getName());
+                    row.put("DATA_TYPE", jdbcType.type);
+                    row.put("TYPE_NAME", jdbcType.name);
+                    row.put("COLUMN_SIZE", columnSize(field));
+                    row.put("BUFFER_LENGTH", null);
+                    row.put("DECIMAL_DIGITS", decimalDigits(field));
+                    row.put("NUM_PREC_RADIX", 10);
+                    row.put("NULLABLE", Boolean.TRUE.equals(field.getIsNullable()) ? DatabaseMetaData.columnNullable : DatabaseMetaData.columnNoNulls);
+                    row.put("REMARKS", field.getDescription());
+                    row.put("COLUMN_DEF", field.getDefaultValue() == null ? null : String.valueOf(field.getDefaultValue()));
+                    row.put("SQL_DATA_TYPE", null);
+                    row.put("SQL_DATETIME_SUB", null);
+                    row.put("CHAR_OCTET_LENGTH", field.getMaxLength());
+                    row.put("ORDINAL_POSITION", ordinal);
+                    row.put("IS_NULLABLE", Boolean.TRUE.equals(field.getIsNullable()) ? "YES" : "NO");
+                    row.put("SCOPE_CATALOG", null);
+                    row.put("SCOPE_SCHEMA", null);
+                    row.put("SCOPE_TABLE", null);
+                    row.put("SOURCE_DATA_TYPE", null);
+                    row.put("IS_AUTOINCREMENT", Boolean.TRUE.equals(field.getAutoID()) ? "YES" : "NO");
+                    row.put("IS_GENERATEDCOLUMN", Boolean.TRUE.equals(field.getIsFunctionOutput()) ? "YES" : "NO");
+                    rows.add(row);
+                    ordinal++;
+                }
             }
         }
         return rows;
+    }
+
+    private List<String> databases(String catalog) throws SQLException {
+        if (catalog != null && !catalog.isBlank()) {
+            return List.of(catalog);
+        }
+        if (connection.hasDatabase()) {
+            return List.of(connection.database());
+        }
+        return allDatabases();
+    }
+
+    private List<String> allDatabases() throws SQLException {
+        List<String> databases = new ArrayList<>();
+        for (Map<String, Object> row : connection.executor().showDatabases().rows()) {
+            databases.add(String.valueOf(row.get("DATABASE_NAME")));
+        }
+        return databases;
     }
 
     private static int versionPart(String version, int index) {

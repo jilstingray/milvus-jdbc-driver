@@ -5,7 +5,7 @@ options { tokenVocab=MilvusJdbcLexer; }
 root: statement SEMI? EOF;
 
 statement
-    : createDatabase | alterDatabase | dropDatabase
+    : useDatabase | createDatabase | alterDatabase | dropDatabase
     | createTable | createCollection | dropTable | dropCollection | renameTable
     | createPartition | dropPartition
     | createIndex | dropIndex
@@ -17,6 +17,7 @@ statement
     | load | release | flush | update
     ;
 
+useDatabase: USE dbName=identifier;
 createDatabase: CREATE DATABASE (IF NOT EXISTS)? dbName=identifier;
 alterDatabase: ALTER DATABASE dbName=identifier SET PROPERTIES propertiesList;
 dropDatabase: DROP DATABASE (IF EXISTS)? dbName=identifier;
@@ -107,4 +108,4 @@ fieldDefinition: fieldName=identifier fieldType fieldConstraint*;
 fieldType: BOOL | INT8 | INT16 | INT32 | INT64 | FLOAT | DOUBLE | JSON | VARCHAR OPEN_PAREN INTEGER CLOSE_PAREN | FLOAT_VECTOR OPEN_PAREN INTEGER CLOSE_PAREN | BINARY_VECTOR OPEN_PAREN INTEGER CLOSE_PAREN | FLOAT16_VECTOR OPEN_PAREN INTEGER CLOSE_PAREN | BFLOAT16_VECTOR OPEN_PAREN INTEGER CLOSE_PAREN | SPARSE_FLOAT_VECTOR OPEN_PAREN INTEGER CLOSE_PAREN | ARRAY;
 fieldConstraint: PRIMARY KEY | NOT NULL | DEFAULT (STRING_LITERAL | IDENTIFIER | signedNumber) | COMMENT STRING_LITERAL | AUTO_ID;
 indexAlgo: STRING_LITERAL | identifier;
-identifier: IDENTIFIER | COLLECTION | COLLECTIONS | DATABASE | DATABASES | TABLE | TABLES | DIMENSION | VALUES | INDEX | INDEXES | PARTITION | PARTITIONS | USER | USERS | ROLE | ROLES | ALIAS | PROGRESS | LOADING | OF | METRIC | PARAMS | ROUND_DECIMAL | CONSISTENCY_LEVEL | VECTOR | SELECT | INSERT | DELETE | UPDATE | CREATE | DROP | GRANT | REVOKE | PRIVILEGE | LOAD | RELEASE | FLUSH | COUNT;
+identifier: IDENTIFIER | COLLECTION | COLLECTIONS | DATABASE | DATABASES | TABLE | TABLES | DIMENSION | VALUES | INDEX | INDEXES | PARTITION | PARTITIONS | DEFAULT | USE | USER | USERS | ROLE | ROLES | ALIAS | PROGRESS | LOADING | OF | METRIC | PARAMS | ROUND_DECIMAL | CONSISTENCY_LEVEL | VECTOR | SELECT | INSERT | DELETE | UPDATE | CREATE | DROP | GRANT | REVOKE | PRIVILEGE | LOAD | RELEASE | FLUSH | COUNT;

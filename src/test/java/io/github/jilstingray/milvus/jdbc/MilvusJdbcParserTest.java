@@ -161,6 +161,24 @@ class MilvusJdbcParserTest {
     }
 
     @Test
+    void parsesOptionalSelectedDatabase() throws SQLException {
+        assertEquals("", MilvusConnection.selectedDatabase("jdbc:milvus://localhost:19530", new Properties()));
+        assertEquals("default", MilvusConnection.selectedDatabase("jdbc:milvus://localhost:19530/default", new Properties()));
+
+        Properties properties = new Properties();
+        properties.setProperty("database", "analytics");
+        assertEquals("analytics", MilvusConnection.selectedDatabase("jdbc:milvus://localhost:19530/default", properties));
+    }
+
+    @Test
+    void parsesUseDatabase() {
+        MilvusJdbcParser.RootContext root = parse("USE default");
+
+        assertNotNull(root.statement().useDatabase());
+        assertEquals("default", root.statement().useDatabase().dbName.getText());
+    }
+
+    @Test
     void rejectsInvalidDefaultQueryLimit() {
         Properties properties = new Properties();
         properties.setProperty("defaultQueryLimit", "0");

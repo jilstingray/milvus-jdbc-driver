@@ -37,11 +37,7 @@ final class MilvusConnection implements AutoCloseable {
         if (info != null) {
             this.properties.putAll(info);
         }
-        String databaseProperty = this.properties.getProperty("database");
-        this.database = databaseProperty == null || databaseProperty.isBlank() ? parsed.database : databaseProperty;
-        if (this.database == null || this.database.isBlank()) {
-            throw new SQLException("Milvus JDBC URL must specify a database, for example jdbc:milvus://host:19530/default");
-        }
+        this.database = selectedDatabase(parsed, this.properties);
         this.defaultQueryLimit = parseDefaultQueryLimit(this.properties);
 
         ConnectConfig.ConnectConfigBuilder builder = ConnectConfig.builder().uri(parsed.milvusUri);
@@ -66,14 +62,23 @@ final class MilvusConnection implements AutoCloseable {
         return database == null ? "" : database;
     }
 
+    boolean hasDatabase() {
+        return database != null && !database.isBlank();
+    }
+
+    String requireDatabase() throws SQLException {
+        if (!hasDatabase()) {
+            throw new SQLException("Milvus JDBC connection has no selected database; specify a database in the URL, call setCatalog/setSchema, or use a database-qualified collection name such as database.collection");
+        }
+        return database;
+    }
+
     void setDatabase(String database) throws SQLException {
         if (database == null || database.isBlank()) {
-            throw new SQLException("Milvus JDBC connection requires a database");
+            this.database = "";
+            return;
         }
-        if (!this.database.equals(database)) {
-            throw new SQLException("Milvus JDBC connections are scoped to database '" + this.database
-                    + "'; open a new connection for database '" + database + "'");
-        }
+        this.database = database;
     }
 
     String jdbcUrl() {
@@ -101,6 +106,21 @@ final class MilvusConnection implements AutoCloseable {
             return DEFAULT_CONSISTENCY_LEVEL;
         }
         return ConsistencyLevel.valueOf(value.trim().toUpperCase(Locale.ROOT));
+    }
+
+    static String selectedDatabase(String jdbcUrl, Properties info) throws SQLException {
+        Properties properties = new Properties();
+        ParsedUrl parsed = parse(jdbcUrl);
+        properties.putAll(parsed.queryProperties);
+        if (info != null) {
+            properties.putAll(info);
+        }
+        return selectedDatabase(parsed, properties);
+    }
+
+    private static String selectedDatabase(ParsedUrl parsed, Properties properties) {
+        String databaseProperty = properties.getProperty("database");
+        return databaseProperty == null || databaseProperty.isBlank() ? parsed.database : databaseProperty;
     }
 
     long defaultQueryLimit() {
@@ -143,16 +163,16 @@ final class MilvusConnection implements AutoCloseable {
 
     private static ParsedUrl parse(String jdbcUrl) throws SQLException {
         if (jdbcUrl == null || !jdbcUrl.startsWith(MilvusDriver.URL_PREFIX)) {
-            throw new SQLException("Milvus JDBC URL must be jdbc:milvus://host:port/database");
+            throw new SQLException("Milvus JDBC URL must be jdbc:milvus://host:port[/database]");
         }
         String raw = jdbcUrl.substring(MilvusDriver.URL_PREFIX.length());
         if (raw.isBlank() || raw.startsWith("http://") || raw.startsWith("https://")) {
-            throw new SQLException("Milvus JDBC URL must be jdbc:milvus://host:port/database");
+            throw new SQLException("Milvus JDBC URL must be jdbc:milvus://host:port[/database]");
         }
         try {
             URI uri = new URI("milvus://" + raw);
             if (uri.getHost() == null) {
-                throw new SQLException("Milvus JDBC URL must be jdbc:milvus://host:port/database");
+                throw new SQLException("Milvus JDBC URL must be jdbc:milvus://host:port[/database]");
             }
             String path = uri.getPath();
             String database = "";

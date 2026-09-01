@@ -1,5 +1,7 @@
 # Milvus JDBC Driver
 
+[中文文档](./README.zh.md)
+
 Standard JDBC driver for Milvus. The driver supports `jdbc:milvus://` URLs, translates SQL into `milvus-sdk-java` calls, and can be loaded through `DriverManager`.
 
 The SQL syntax partially references the Milvus SQL syntax from [dbvisitor](https://github.com/zycgit/dbvisitor).
@@ -29,13 +31,13 @@ Connection conn = DriverManager.getConnection(
 
 ### URL
 
-`jdbc:milvus://host:19530/database[?username=...&password=...&token=...&consistencyLevel=STRONG&defaultQueryLimit=1000]`
+`jdbc:milvus://host:19530[/database][?username=...&password=...&token=...&consistencyLevel=STRONG&defaultQueryLimit=16384]`
 
 Supported URL query parameters and connection properties: `user`, `username`, `password`, `token`, `database`, `consistencyLevel`, `defaultQueryLimit`.
 
-- Properties passed through `DriverManager.getConnection(url, properties)` take precedence over values in the URL query string. The database can be supplied either through the URL path (`/database`) or through the `database` parameter/property.
+- Properties passed through `DriverManager.getConnection(url, properties)` take precedence over values in the URL query string. The selected database can be supplied either through the URL path (`/database`) or through the `database` parameter/property.
 
-- The `database` is required. A connection is bound to one Milvus database; metadata such as catalogs, schemas, and tables only exposes the database of the current connection. Create separate connections if you need to browse multiple databases.
+- The `database` is optional. Without a selected database, collection statements must call `USE database`, call `Connection.setCatalog`/`setSchema`, or use a database-qualified collection name such as `database.collection`.
 
 - `consistencyLevel` controls the consistency level used by query and search requests. The default is `STRONG`.
 
@@ -96,7 +98,7 @@ Important differences:
 
 Command categories:
 
-- Database: `CREATE/ALTER/DROP DATABASE`, `SHOW DATABASES`
+- Database: `CREATE/ALTER/DROP DATABASE`, `SHOW DATABASES`, `USE database`
 - Collections/tables: `CREATE TABLE`, `CREATE COLLECTION ... DIMENSION`, `DROP TABLE`, `SHOW TABLES`, `SHOW CREATE TABLE`, `ALTER TABLE ... RENAME TO ...`
 - Partitions: `CREATE/DROP PARTITION`, `SHOW PARTITION(S)`
 - Aliases: `CREATE/ALTER/DROP ALIAS`
@@ -108,6 +110,7 @@ Command categories:
 Examples:
 
 - `SHOW COLLECTIONS`
+- `USE default`
 - `DESCRIBE COLLECTION collection_name`
 - `DESCRIBE TABLE collection_name`
 - `CREATE COLLECTION collection_name DIMENSION 768`

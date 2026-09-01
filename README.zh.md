@@ -29,13 +29,13 @@ Connection conn = DriverManager.getConnection(
 
 ### URL
 
-`jdbc:milvus://host:19530/database[?username=...&password=...&token=...&consistencyLevel=STRONG&defaultQueryLimit=1000]`
+`jdbc:milvus://host:19530[/database][?username=...&password=...&token=...&consistencyLevel=STRONG&defaultQueryLimit=16384]`
 
 支持的 URL 查询参数和连接属性：`user`、`username`、`password`、`token`、`database`、`consistencyLevel`、`defaultQueryLimit`。
 
-- 通过 `DriverManager.getConnection(url, properties)` 传入的属性优先于 URL 查询字符串中的值。database 可以通过 URL 路径（`/database`）提供，也可以通过 `database` 参数或属性提供。
+- 通过 `DriverManager.getConnection(url, properties)` 传入的属性优先于 URL 查询字符串中的值。当前选中的 database 可以通过 URL 路径（`/database`）提供，也可以通过 `database` 参数或属性提供。
 
-- `database` 是必填项。一个连接只绑定一个 Milvus database；catalog、schema、table 等元数据也只暴露当前连接的 database。如果需要浏览多个 database，请分别创建连接。
+- `database` 是可选项。未选中 database 时，执行 collection 语句需要先执行 `USE database`，调用 `Connection.setCatalog`/`setSchema` 选中 database，或使用 `database.collection` 这样的全限定 collection 名称。
 
 - `consistencyLevel` 控制 query 和 search 请求使用的一致性级别。默认值为 `STRONG`。
 
@@ -96,7 +96,7 @@ Milvus 官方术语可参考：[数据库](https://milvus.io/docs/zh/manage_data
 
 命令类别：
 
-- Database：`CREATE/ALTER/DROP DATABASE`、`SHOW DATABASES`
+- Database：`CREATE/ALTER/DROP DATABASE`、`SHOW DATABASES`、`USE database`
 - Collections/tables：`CREATE TABLE`、`CREATE COLLECTION ... DIMENSION`、`DROP TABLE`、`SHOW TABLES`、`SHOW CREATE TABLE`、`ALTER TABLE ... RENAME TO ...`
 - Partitions：`CREATE/DROP PARTITION`、`SHOW PARTITION(S)`
 - Aliases：`CREATE/ALTER/DROP ALIAS`
@@ -108,6 +108,7 @@ Milvus 官方术语可参考：[数据库](https://milvus.io/docs/zh/manage_data
 示例：
 
 - `SHOW COLLECTIONS`
+- `USE default`
 - `DESCRIBE COLLECTION collection_name`
 - `DESCRIBE TABLE collection_name`
 - `CREATE COLLECTION collection_name DIMENSION 768`

@@ -12,6 +12,7 @@ import io.milvus.v2.common.IndexParam;
 import io.milvus.v2.service.collection.request.CreateCollectionReq;
 import io.milvus.v2.service.collection.request.DescribeCollectionReq;
 import io.milvus.v2.service.collection.request.DropCollectionReq;
+import io.milvus.v2.service.collection.request.ListCollectionsReq;
 
 import io.milvus.v2.service.utility.request.AlterAliasReq;
 import io.milvus.v2.service.utility.request.CreateAliasReq;
@@ -95,12 +96,16 @@ final class SqlExecutor {
     }
 
     QueryResult showCollections() throws SQLException {
-        ListCollectionsResp resp = connection.client().listCollections();
+        return showCollections(connection.requireDatabase());
+    }
+
+    QueryResult showCollections(String database) throws SQLException {
+        ListCollectionsResp resp = connection.client().listCollectionsV2(ListCollectionsReq.builder().databaseName(database).build());
         List<Map<String, Object>> rows = new ArrayList<>();
         for (String name : resp.getCollectionNames()) {
             Map<String, Object> row = new LinkedHashMap<>();
-            row.put("TABLE_CAT", connection.database());
-            row.put("TABLE_SCHEM", connection.database());
+            row.put("TABLE_CAT", database);
+            row.put("TABLE_SCHEM", database);
             row.put("TABLE_NAME", name);
             row.put("TABLE_TYPE", "COLLECTION");
             rows.add(row);
@@ -109,7 +114,7 @@ final class SqlExecutor {
     }
 
 
-    private QueryResult showDatabases() throws SQLException {
+    QueryResult showDatabases() throws SQLException {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (String name : connection.client().listDatabases().getDatabaseNames()) {
             rows.add(row("DATABASE_NAME", name));
@@ -132,29 +137,34 @@ final class SqlExecutor {
         return QueryResult.update(0);
     }
 
+    private QueryResult useDatabase(String name) throws SQLException {
+        connection.setDatabase(name);
+        return QueryResult.update(0);
+    }
+
     private QueryResult renameTable(String collection, String newName) throws SQLException {
         connection.client().renameCollection(
-            RenameCollectionReq.builder().databaseName(connection.database()).collectionName(collection).newCollectionName(newName)
+            RenameCollectionReq.builder().databaseName(connection.requireDatabase()).collectionName(collection).newCollectionName(newName)
                 .build());
         return QueryResult.update(0);
     }
 
     private QueryResult createPartition(String collection, String partition) throws SQLException {
         connection.client().createPartition(
-            CreatePartitionReq.builder().databaseName(connection.database()).collectionName(collection).partitionName(partition).build());
+            CreatePartitionReq.builder().databaseName(connection.requireDatabase()).collectionName(collection).partitionName(partition).build());
         return QueryResult.update(0);
     }
 
     private QueryResult dropPartition(String collection, String partition) throws SQLException {
         connection.client().dropPartition(
-            DropPartitionReq.builder().databaseName(connection.database()).collectionName(collection).partitionName(partition).build());
+            DropPartitionReq.builder().databaseName(connection.requireDatabase()).collectionName(collection).partitionName(partition).build());
         return QueryResult.update(0);
     }
 
     private QueryResult showPartitions(String collection) throws SQLException {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (String name : connection.client()
-            .listPartitions(ListPartitionsReq.builder().databaseName(connection.database()).collectionName(collection).build())) {
+            .listPartitions(ListPartitionsReq.builder().databaseName(connection.requireDatabase()).collectionName(collection).build())) {
             rows.add(row("PARTITION_NAME", name));
         }
         return QueryResult.rows(rows, List.of(new ColumnInfo("PARTITION_NAME", java.sql.Types.VARCHAR, "VARCHAR")));
@@ -162,24 +172,24 @@ final class SqlExecutor {
 
     private QueryResult createAlias(String alias, String collection) throws SQLException {
         connection.client()
-            .createAlias(CreateAliasReq.builder().databaseName(connection.database()).alias(alias).collectionName(collection).build());
+            .createAlias(CreateAliasReq.builder().databaseName(connection.requireDatabase()).alias(alias).collectionName(collection).build());
         return QueryResult.update(0);
     }
 
     private QueryResult alterAlias(String alias, String collection) throws SQLException {
         connection.client()
-            .alterAlias(AlterAliasReq.builder().databaseName(connection.database()).alias(alias).collectionName(collection).build());
+            .alterAlias(AlterAliasReq.builder().databaseName(connection.requireDatabase()).alias(alias).collectionName(collection).build());
         return QueryResult.update(0);
     }
 
     private QueryResult dropAlias(String alias) throws SQLException {
-        connection.client().dropAlias(DropAliasReq.builder().databaseName(connection.database()).alias(alias).build());
+        connection.client().dropAlias(DropAliasReq.builder().databaseName(connection.requireDatabase()).alias(alias).build());
         return QueryResult.update(0);
     }
 
     private QueryResult showAliases(String collection) throws SQLException {
         Object resp = connection.client()
-            .listAliases(ListAliasesReq.builder().databaseName(connection.database()).collectionName(collection).build());
+            .listAliases(ListAliasesReq.builder().databaseName(connection.requireDatabase()).collectionName(collection).build());
         return QueryResult.rows(List.of(row("ALIASES", String.valueOf(resp))));
     }
 
@@ -231,14 +241,14 @@ final class SqlExecutor {
 
     private QueryResult grantPrivilege(String role, String objectType, String objectName, String privilege) throws SQLException {
         connection.client().grantPrivilege(
-            GrantPrivilegeReq.builder().roleName(role).dbName(connection.database()).objectType(objectType).objectName(objectName)
+            GrantPrivilegeReq.builder().roleName(role).dbName(connection.requireDatabase()).objectType(objectType).objectName(objectName)
                 .privilege(privilege).build());
         return QueryResult.update(0);
     }
 
     private QueryResult revokePrivilege(String role, String objectType, String objectName, String privilege) throws SQLException {
         connection.client().revokePrivilege(
-            RevokePrivilegeReq.builder().roleName(role).dbName(connection.database()).objectType(objectType).objectName(objectName)
+            RevokePrivilegeReq.builder().roleName(role).dbName(connection.requireDatabase()).objectType(objectType).objectName(objectName)
                 .privilege(privilege).build());
         return QueryResult.update(0);
     }
@@ -246,10 +256,10 @@ final class SqlExecutor {
     private QueryResult load(String collection, String partition) throws SQLException {
         if (partition == null) {
             connection.client()
-                .loadCollection(LoadCollectionReq.builder().databaseName(connection.database()).collectionName(collection).build());
+                .loadCollection(LoadCollectionReq.builder().databaseName(connection.requireDatabase()).collectionName(collection).build());
         } else {
             connection.client().loadPartitions(
-                LoadPartitionsReq.builder().databaseName(connection.database()).collectionName(collection)
+                LoadPartitionsReq.builder().databaseName(connection.requireDatabase()).collectionName(collection)
                     .partitionNames(List.of(partition))
                     .build());
         }
@@ -259,10 +269,10 @@ final class SqlExecutor {
     private QueryResult release(String collection, String partition) throws SQLException {
         if (partition == null) {
             connection.client()
-                .releaseCollection(ReleaseCollectionReq.builder().databaseName(connection.database()).collectionName(collection).build());
+                .releaseCollection(ReleaseCollectionReq.builder().databaseName(connection.requireDatabase()).collectionName(collection).build());
         } else {
             connection.client().releasePartitions(
-                ReleasePartitionsReq.builder().databaseName(connection.database()).collectionName(collection)
+                ReleasePartitionsReq.builder().databaseName(connection.requireDatabase()).collectionName(collection)
                     .partitionNames(List.of(partition))
                     .build());
         }
@@ -270,13 +280,13 @@ final class SqlExecutor {
     }
 
     private QueryResult flush(String collection) throws SQLException {
-        connection.client().flush(FlushReq.builder().databaseName(connection.database()).collectionNames(List.of(collection)).build());
+        connection.client().flush(FlushReq.builder().databaseName(connection.requireDatabase()).collectionNames(List.of(collection)).build());
         return QueryResult.update(0);
     }
 
-    private QueryResult count(String collection, String filter) throws SQLException {
+    private QueryResult count(CollectionRef source, String filter) throws SQLException {
         QueryReq.QueryReqBuilder builder =
-            QueryReq.builder().databaseName(connection.database()).collectionName(collection).outputFields(List.of("count(*)"))
+            QueryReq.builder().databaseName(source.database).collectionName(source.collection).outputFields(List.of("count(*)"))
                 .filter(filterOrEmpty(filter));
         QueryResp resp = connection.client().query(builder.build());
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -286,14 +296,14 @@ final class SqlExecutor {
         return QueryResult.rows(rows, List.of(new ColumnInfo("count(*)", java.sql.Types.BIGINT, "BIGINT")));
     }
 
-    private QueryResult upsert(String collection, List<String> fields, List<List<Object>> values) throws SQLException {
-        List<JsonObject> rows = insertRows(collection, fields, values, true);
+    private QueryResult upsert(CollectionRef source, List<String> fields, List<List<Object>> values) throws SQLException {
+        List<JsonObject> rows = insertRows(source, fields, values, true);
         UpsertResp resp = connection.client()
-            .upsert(UpsertReq.builder().databaseName(connection.database()).collectionName(collection).data(rows).build());
+            .upsert(UpsertReq.builder().databaseName(source.database).collectionName(source.collection).data(rows).build());
         return QueryResult.update(resp.getUpsertCnt());
     }
 
-    private QueryResult update(String collection, String partition, Map<String, Object> updates, UpdateTarget target)
+    private QueryResult update(CollectionRef source, String partition, Map<String, Object> updates, UpdateTarget target)
         throws SQLException {
         if (!target.isVectorSearch() && (target.filter == null || target.filter.isBlank())) {
             throw new SQLException("UPDATE requires a WHERE filter");
@@ -304,14 +314,14 @@ final class SqlExecutor {
 
         DescribeCollectionResp description;
         try {
-            description = describe(collection);
+            description = describe(source);
         } catch (RuntimeException e) {
-            throw new SQLException("Failed to describe collection '" + collection + "' for UPDATE", e);
+            throw new SQLException("Failed to describe collection '" + source.collection + "' for UPDATE", e);
         }
         Map<String, CreateCollectionReq.FieldSchema> schemaFields = schemaFields(description);
         String primaryField = primaryField(description);
         if (primaryField == null || primaryField.isBlank()) {
-            throw new SQLException("Cannot UPDATE collection '" + collection + "' because its primary key field is unknown");
+            throw new SQLException("Cannot UPDATE collection '" + source.collection + "' because its primary key field is unknown");
         }
         CreateCollectionReq.FieldSchema primarySchema = schemaFields.get(primaryField);
         boolean dynamicFields = Boolean.TRUE.equals(description.getEnableDynamicField());
@@ -321,24 +331,24 @@ final class SqlExecutor {
                 throw new SQLException("Cannot UPDATE primary key field '" + field + "'");
             }
             if (schema == null && !dynamicFields) {
-                throw new SQLException("Cannot UPDATE unknown field '" + field + "' on collection '" + collection + "'");
+                throw new SQLException("Cannot UPDATE unknown field '" + field + "' on collection '" + source.collection + "'");
             }
         }
 
         if (target.isVectorSearch()) {
-            return updateByVectorSearch(collection, partition, updates, schemaFields, primaryField, target);
+            return updateByVectorSearch(source, partition, updates, schemaFields, primaryField, target);
         }
 
-        long queryLimit = queryLimit(collection, partition, target);
+        long queryLimit = queryLimit(source, partition, target);
         if (queryLimit == 0) {
             return QueryResult.update(0);
         }
 
         if (updatesVectorField(updates, schemaFields)) {
-            return updateByFullRowQuery(collection, partition, updates, schemaFields, primaryField, target.filter, queryLimit);
+            return updateByFullRowQuery(source, partition, updates, schemaFields, primaryField, target.filter, queryLimit);
         }
 
-        List<Object> ids = queryPrimaryKeys(collection, partition, primaryField, target.filter, queryLimit);
+        List<Object> ids = queryPrimaryKeys(source, partition, primaryField, target.filter, queryLimit);
         if (ids.isEmpty()) {
             return QueryResult.update(0);
         }
@@ -362,8 +372,8 @@ final class SqlExecutor {
         }
 
         UpsertReq.UpsertReqBuilder builder = UpsertReq.builder()
-            .databaseName(connection.database())
-            .collectionName(collection)
+            .databaseName(source.database)
+            .collectionName(source.collection)
             .data(rows)
             .partialUpdate(true)
             .fieldOps(fieldOps);
@@ -374,16 +384,16 @@ final class SqlExecutor {
         try {
             resp = connection.client().upsert(builder.build());
         } catch (RuntimeException e) {
-            throw new SQLException("Milvus partial upsert failed while executing UPDATE on collection '" + collection + "'", e);
+            throw new SQLException("Milvus partial upsert failed while executing UPDATE on collection '" + source.collection + "'", e);
         }
         return QueryResult.update(resp.getUpsertCnt());
     }
 
-    private long queryLimit(String collection, String partition, UpdateTarget target) throws SQLException {
+    private long queryLimit(CollectionRef source, String partition, UpdateTarget target) throws SQLException {
         if (target.limit > 0) {
             return target.limit;
         }
-        long matched = countMatched(collection, partition, target.filter);
+        long matched = countMatched(source, partition, target.filter);
         if (matched == 0) {
             return 0;
         }
@@ -395,20 +405,20 @@ final class SqlExecutor {
         return matched;
     }
 
-    private QueryResult updateByFullRowQuery(String collection, String partition, Map<String, Object> updates,
+    private QueryResult updateByFullRowQuery(CollectionRef source, String partition, Map<String, Object> updates,
                                              Map<String, CreateCollectionReq.FieldSchema> schemaFields, String primaryField,
                                              String filter, long limit) throws SQLException {
-        List<Map<String, Object>> matchedRows = queryRowsForUpdate(collection, partition, filter, limit);
-        return updateRowsByFullRowUpsert(collection, partition, updates, schemaFields, primaryField, matchedRows);
+        List<Map<String, Object>> matchedRows = queryRowsForUpdate(source, partition, filter, limit);
+        return updateRowsByFullRowUpsert(source, partition, updates, schemaFields, primaryField, matchedRows);
     }
 
-    private QueryResult updateByVectorSearch(String collection, String partition, Map<String, Object> updates,
+    private QueryResult updateByVectorSearch(CollectionRef source, String partition, Map<String, Object> updates,
                                              Map<String, CreateCollectionReq.FieldSchema> schemaFields, String primaryField,
                                              UpdateTarget target) throws SQLException {
         long limit = target.limit > 0 ? target.limit : 10;
         SearchReq.SearchReqBuilder builder = SearchReq.builder()
-            .databaseName(connection.database())
-            .collectionName(collection)
+            .databaseName(source.database)
+            .collectionName(source.collection)
             .annsField(target.vectorField)
             .data(List.of(new FloatVec(toFloatList(target.vectorValue))))
             .limit(limit)
@@ -427,7 +437,7 @@ final class SqlExecutor {
         try {
             resp = connection.client().search(builder.build());
         } catch (RuntimeException e) {
-            throw new SQLException("Failed to search rows for UPDATE on collection '" + collection + "'", e);
+            throw new SQLException("Failed to search rows for UPDATE on collection '" + source.collection + "'", e);
         }
         List<Map<String, Object>> matchedRows = new ArrayList<>();
         for (List<SearchResp.SearchResult> batch : resp.getSearchResults()) {
@@ -435,10 +445,10 @@ final class SqlExecutor {
                 matchedRows.add(new LinkedHashMap<>(result.getEntity()));
             }
         }
-        return updateRowsByFullRowUpsert(collection, partition, updates, schemaFields, primaryField, matchedRows);
+        return updateRowsByFullRowUpsert(source, partition, updates, schemaFields, primaryField, matchedRows);
     }
 
-    private QueryResult updateRowsByFullRowUpsert(String collection, String partition, Map<String, Object> updates,
+    private QueryResult updateRowsByFullRowUpsert(CollectionRef source, String partition, Map<String, Object> updates,
                                                   Map<String, CreateCollectionReq.FieldSchema> schemaFields, String primaryField,
                                                   List<Map<String, Object>> matchedRows) throws SQLException {
         if (matchedRows.isEmpty()) {
@@ -461,8 +471,8 @@ final class SqlExecutor {
         }
 
         UpsertReq.UpsertReqBuilder builder = UpsertReq.builder()
-            .databaseName(connection.database())
-            .collectionName(collection)
+            .databaseName(source.database)
+            .collectionName(source.collection)
             .data(rows);
         if (partition != null) {
             builder.partitionName(partition);
@@ -471,7 +481,7 @@ final class SqlExecutor {
         try {
             resp = connection.client().upsert(builder.build());
         } catch (RuntimeException e) {
-            throw new SQLException("Milvus full-row upsert failed while executing UPDATE on collection '" + collection + "'", e);
+            throw new SQLException("Milvus full-row upsert failed while executing UPDATE on collection '" + source.collection + "'", e);
         }
         return QueryResult.update(resp.getUpsertCnt());
     }
@@ -504,7 +514,7 @@ final class SqlExecutor {
 
     private QueryResult createCollection(String collection, int dimension) throws SQLException {
         connection.client().createCollection(CreateCollectionReq.builder()
-            .databaseName(connection.database())
+            .databaseName(connection.requireDatabase())
             .collectionName(collection)
             .dimension(dimension)
             .build());
@@ -519,7 +529,7 @@ final class SqlExecutor {
             .enableDynamicField(true)
             .build();
         connection.client().createCollection(CreateCollectionReq.builder()
-            .databaseName(connection.database())
+            .databaseName(connection.requireDatabase())
             .collectionName(collection)
             .collectionSchema(schema)
             .properties(properties)
@@ -544,7 +554,7 @@ final class SqlExecutor {
             param.extraParams(new LinkedHashMap<>(properties));
         }
         connection.client().createIndex(CreateIndexReq.builder()
-            .databaseName(connection.database())
+            .databaseName(connection.requireDatabase())
             .collectionName(collection)
             .indexParams(List.of(param.build()))
             .build());
@@ -553,14 +563,14 @@ final class SqlExecutor {
 
     private QueryResult dropIndex(String collection, String indexName) throws SQLException {
         connection.client()
-            .dropIndex(DropIndexReq.builder().databaseName(connection.database()).collectionName(collection).indexName(indexName).build());
+            .dropIndex(DropIndexReq.builder().databaseName(connection.requireDatabase()).collectionName(collection).indexName(indexName).build());
         return QueryResult.update(0);
     }
 
     private QueryResult showIndexes(String collection) throws SQLException {
         List<Map<String, Object>> rows = new ArrayList<>();
         for (String name : connection.client()
-            .listIndexes(ListIndexesReq.builder().databaseName(connection.database()).collectionName(collection).build())) {
+            .listIndexes(ListIndexesReq.builder().databaseName(connection.requireDatabase()).collectionName(collection).build())) {
             rows.add(row("INDEX_NAME", name));
         }
         return QueryResult.rows(rows, List.of(new ColumnInfo("INDEX_NAME", java.sql.Types.VARCHAR, "VARCHAR")));
@@ -568,19 +578,19 @@ final class SqlExecutor {
 
     private QueryResult showIndex(String collection, String indexName) throws SQLException {
         Object resp = connection.client().describeIndex(
-            DescribeIndexReq.builder().databaseName(connection.database()).collectionName(collection).indexName(indexName).build());
+            DescribeIndexReq.builder().databaseName(connection.requireDatabase()).collectionName(collection).indexName(indexName).build());
         return QueryResult.rows(List.of(row("INDEX", String.valueOf(resp))));
     }
 
     private QueryResult showCreateTable(String collection) throws SQLException {
         DescribeCollectionResp resp = connection.client()
-            .describeCollection(DescribeCollectionReq.builder().databaseName(connection.database()).collectionName(collection).build());
+            .describeCollection(DescribeCollectionReq.builder().databaseName(connection.requireDatabase()).collectionName(collection).build());
         return QueryResult.rows(List.of(row("TABLE_NAME", collection, "CREATE_TABLE", String.valueOf(resp.getCollectionSchema()))));
     }
 
     private QueryResult dropCollection(String collection) throws SQLException {
         connection.client().dropCollection(DropCollectionReq.builder()
-            .databaseName(connection.database())
+            .databaseName(connection.requireDatabase())
             .collectionName(collection)
             .build());
         return QueryResult.update(0);
@@ -588,7 +598,7 @@ final class SqlExecutor {
 
     private QueryResult describeCollection(String collection) throws SQLException {
         DescribeCollectionResp resp = connection.client().describeCollection(DescribeCollectionReq.builder()
-            .databaseName(connection.database())
+            .databaseName(connection.requireDatabase())
             .collectionName(collection)
             .build());
         List<Map<String, Object>> rows = new ArrayList<>();
@@ -605,19 +615,19 @@ final class SqlExecutor {
         return QueryResult.rows(rows);
     }
 
-    private QueryResult insert(String collection, List<String> fields, List<List<Object>> values) throws SQLException {
-        List<JsonObject> rows = insertRows(collection, fields, values, false);
+    private QueryResult insert(CollectionRef source, List<String> fields, List<List<Object>> values) throws SQLException {
+        List<JsonObject> rows = insertRows(source, fields, values, false);
         InsertResp resp = connection.client().insert(InsertReq.builder()
-            .databaseName(connection.database())
-            .collectionName(collection)
+            .databaseName(source.database)
+            .collectionName(source.collection)
             .data(rows)
             .build());
         return QueryResult.update(resp.getInsertCnt());
     }
 
-    private List<JsonObject> insertRows(String collection, List<String> fields, List<List<Object>> values, boolean upsert)
+    private List<JsonObject> insertRows(CollectionRef source, List<String> fields, List<List<Object>> values, boolean upsert)
         throws SQLException {
-        DescribeCollectionResp description = describe(collection);
+        DescribeCollectionResp description = describe(source);
         Map<String, CreateCollectionReq.FieldSchema> schemaFields = schemaFields(description);
         boolean allowInsertAutoId = booleanProperty(description.getProperties(), "allow_insert_auto_id");
         List<JsonObject> rows = new ArrayList<>();
@@ -640,10 +650,10 @@ final class SqlExecutor {
         return rows;
     }
 
-    private DescribeCollectionResp describe(String collection) throws SQLException {
+    private DescribeCollectionResp describe(CollectionRef source) throws SQLException {
         return connection.client().describeCollection(DescribeCollectionReq.builder()
-            .databaseName(connection.database())
-            .collectionName(collection)
+            .databaseName(source.database)
+            .collectionName(source.collection)
             .build());
     }
 
@@ -673,22 +683,22 @@ final class SqlExecutor {
         return fields;
     }
 
-    private QueryResult delete(String collection, String filter) throws SQLException {
+    private QueryResult delete(CollectionRef source, String filter) throws SQLException {
         if (filter == null || filter.isBlank()) {
             throw new SQLException("DELETE requires a WHERE filter");
         }
         DeleteResp resp = connection.client().delete(DeleteReq.builder()
-            .databaseName(connection.database())
-            .collectionName(collection)
+            .databaseName(source.database)
+            .collectionName(source.collection)
             .filter(filter)
             .build());
         return QueryResult.update(resp.getDeleteCnt());
     }
 
-    private long countMatched(String collection, String partition, String filter) throws SQLException {
+    private long countMatched(CollectionRef source, String partition, String filter) throws SQLException {
         QueryReq.QueryReqBuilder builder = QueryReq.builder()
-            .databaseName(connection.database())
-            .collectionName(collection)
+            .databaseName(source.database)
+            .collectionName(source.collection)
             .outputFields(List.of("count(*)"))
             .filter(filter);
         if (partition != null) {
@@ -702,7 +712,7 @@ final class SqlExecutor {
         try {
             resp = connection.client().query(builder.build());
         } catch (RuntimeException e) {
-            throw new SQLException("Failed to count rows for UPDATE on collection '" + collection + "'", e);
+            throw new SQLException("Failed to count rows for UPDATE on collection '" + source.collection + "'", e);
         }
         if (resp.getQueryResults().isEmpty()) {
             return 0;
@@ -725,14 +735,14 @@ final class SqlExecutor {
         return 0;
     }
 
-    private List<Object> queryPrimaryKeys(String collection, String partition, String primaryField, String filter, long limit)
+    private List<Object> queryPrimaryKeys(CollectionRef source, String partition, String primaryField, String filter, long limit)
         throws SQLException {
         if (limit <= 0) {
             return List.of();
         }
         QueryReq.QueryReqBuilder builder = QueryReq.builder()
-            .databaseName(connection.database())
-            .collectionName(collection)
+            .databaseName(source.database)
+            .collectionName(source.collection)
             .outputFields(List.of(primaryField))
             .filter(filter)
             .limit(limit);
@@ -747,7 +757,7 @@ final class SqlExecutor {
         try {
             resp = connection.client().query(builder.build());
         } catch (RuntimeException e) {
-            throw new SQLException("Failed to query primary keys for UPDATE on collection '" + collection + "'", e);
+            throw new SQLException("Failed to query primary keys for UPDATE on collection '" + source.collection + "'", e);
         }
         List<Object> ids = new ArrayList<>();
         for (QueryResp.QueryResult result : resp.getQueryResults()) {
@@ -760,14 +770,14 @@ final class SqlExecutor {
         return ids;
     }
 
-    private List<Map<String, Object>> queryRowsForUpdate(String collection, String partition, String filter, long limit)
+    private List<Map<String, Object>> queryRowsForUpdate(CollectionRef source, String partition, String filter, long limit)
         throws SQLException {
         if (limit <= 0) {
             return List.of();
         }
         QueryReq.QueryReqBuilder builder = QueryReq.builder()
-            .databaseName(connection.database())
-            .collectionName(collection)
+            .databaseName(source.database)
+            .collectionName(source.collection)
             .outputFields(List.of("*"))
             .filter(filter)
             .limit(limit);
@@ -782,7 +792,7 @@ final class SqlExecutor {
         try {
             resp = connection.client().query(builder.build());
         } catch (RuntimeException e) {
-            throw new SQLException("Failed to query rows for UPDATE on collection '" + collection + "'", e);
+            throw new SQLException("Failed to query rows for UPDATE on collection '" + source.collection + "'", e);
         }
         List<Map<String, Object>> rows = new ArrayList<>();
         for (QueryResp.QueryResult result : resp.getQueryResults()) {
@@ -828,12 +838,12 @@ final class SqlExecutor {
         }
     }
 
-    private QueryResult select(String collection, List<String> outputFields, SelectTail parsed) throws SQLException {
-        List<ColumnInfo> schemaColumns = collectionColumns(collection, outputFields);
+    private QueryResult select(CollectionRef source, List<String> outputFields, SelectTail parsed) throws SQLException {
+        List<ColumnInfo> schemaColumns = collectionColumns(source, outputFields);
         if (parsed.vectorField != null) {
             SearchReq.SearchReqBuilder builder = SearchReq.builder()
-                .databaseName(connection.database())
-                .collectionName(collection)
+                .databaseName(source.database)
+                .collectionName(source.collection)
                 .annsField(parsed.vectorField)
                 .data(List.of(new FloatVec(toFloatList(parsed.vectorValue))))
                 .limit(parsed.limit <= 0 ? 10 : parsed.limit)
@@ -864,8 +874,8 @@ final class SqlExecutor {
         }
 
         QueryReq.QueryReqBuilder builder = QueryReq.builder()
-            .databaseName(connection.database())
-            .collectionName(collection)
+            .databaseName(source.database)
+            .collectionName(source.collection)
             .outputFields(outputFields)
             .filter(filterOrEmpty(parsed.filter));
         builder.limit(parsed.limit > 0 ? parsed.limit : connection.defaultQueryLimit());
@@ -881,11 +891,8 @@ final class SqlExecutor {
         return QueryResult.rows(rows, schemaColumns);
     }
 
-    private List<ColumnInfo> collectionColumns(String collection, List<String> outputFields) throws SQLException {
-        DescribeCollectionResp description = connection.client().describeCollection(DescribeCollectionReq.builder()
-            .databaseName(connection.database())
-            .collectionName(collection)
-            .build());
+    private List<ColumnInfo> collectionColumns(CollectionRef source, List<String> outputFields) throws SQLException {
+        DescribeCollectionResp description = describe(source);
         if (description.getCollectionSchema() == null) {
             return null;
         }
@@ -1076,16 +1083,12 @@ final class SqlExecutor {
     private CollectionRef collectionRef(String name) throws SQLException {
         int dot = name.indexOf('.');
         if (dot < 0) {
-            return new CollectionRef(connection.database(), name);
+            return new CollectionRef(connection.requireDatabase(), name);
         }
         String database = name.substring(0, dot);
         String collection = name.substring(dot + 1);
         if (database.isBlank() || collection.isBlank()) {
             throw new SQLException("Invalid Milvus collection reference: " + name);
-        }
-        if (!database.equals(connection.database())) {
-            throw new SQLException("Milvus JDBC connection is scoped to database '" + connection.database()
-                + "' and cannot query database '" + database + "'");
         }
         return new CollectionRef(database, collection);
     }
@@ -1110,6 +1113,11 @@ final class SqlExecutor {
         @Override
         public QueryResult visitShowTables(MilvusJdbcParser.ShowTablesContext ctx) {
             return unchecked(() -> showCollections());
+        }
+
+        @Override
+        public QueryResult visitUseDatabase(MilvusJdbcParser.UseDatabaseContext ctx) {
+            return unchecked(() -> useDatabase(identifier(ctx.dbName)));
         }
 
         @Override
@@ -1222,7 +1230,7 @@ final class SqlExecutor {
         public QueryResult visitCount(MilvusJdbcParser.CountContext ctx) {
             return unchecked(() -> {
                 CollectionRef source = collectionRef(identifier(ctx.collectionName));
-                return count(source.collection, filterText(tokens, ctx.expression()));
+                return count(source, filterText(tokens, ctx.expression()));
             });
         }
 
@@ -1233,7 +1241,7 @@ final class SqlExecutor {
             for (MilvusJdbcParser.ValueRowContext row : ctx.valueRows().valueRow()) {
                 values.add(literals(row.valueList));
             }
-            return unchecked(() -> upsert(identifier(ctx.collectionName), fields, values));
+            return unchecked(() -> upsert(collectionRef(identifier(ctx.collectionName)), fields, values));
         }
 
         @Override
@@ -1292,7 +1300,7 @@ final class SqlExecutor {
                     target.vectorOperator = ctx.sortClause().distanceOperator().getText();
                     target.vectorValue = literal(ctx.sortClause().vectorValue().listLiteral());
                 }
-                return update(source.collection, ctx.partitionName == null ? null : identifier(ctx.partitionName), updates, target);
+                return update(source, ctx.partitionName == null ? null : identifier(ctx.partitionName), updates, target);
             });
         }
 
@@ -1357,14 +1365,14 @@ final class SqlExecutor {
             for (MilvusJdbcParser.ValueRowContext row : ctx.valueRows().valueRow()) {
                 values.add(literals(row.valueList));
             }
-            return unchecked(() -> insert(identifier(ctx.collectionName), fields, values));
+            return unchecked(() -> insert(collectionRef(identifier(ctx.collectionName)), fields, values));
         }
 
         @Override
         public QueryResult visitDelete(MilvusJdbcParser.DeleteContext ctx) {
             return unchecked(() -> {
                 CollectionRef source = collectionRef(identifier(ctx.collectionName));
-                return delete(source.collection, filterText(tokens, ctx.expression()));
+                return delete(source, filterText(tokens, ctx.expression()));
             });
         }
 
@@ -1388,7 +1396,7 @@ final class SqlExecutor {
             return unchecked(() -> {
                 CollectionRef source = collectionRef(identifier(ctx.source.collectionName));
                 String alias = ctx.source.alias == null ? null : identifier(ctx.source.alias);
-                return select(source.collection, selectFields(ctx.selectElements(), alias), tail);
+                return select(source, selectFields(ctx.selectElements(), alias), tail);
             });
         }
 

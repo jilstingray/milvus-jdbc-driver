@@ -2,6 +2,8 @@
 
 [中文文档](./README.zh.md)
 
+[SQL syntax manual](docs/SYNTAX.md) | [中文语法手册](docs/SYNTAX.zh.md)
+
 Standard JDBC driver for Milvus. The driver supports `jdbc:milvus://` URLs, translates SQL into `milvus-sdk-java` calls, and can be loaded through `DriverManager`.
 
 The SQL syntax partially references the Milvus SQL syntax from [dbvisitor](https://github.com/zycgit/dbvisitor).

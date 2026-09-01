@@ -1,5 +1,9 @@
 # Milvus JDBC Driver
 
+[English README](./README.md)
+
+[SQL syntax manual](docs/SYNTAX.md) | [中文语法手册](docs/SYNTAX.zh.md)
+
 Milvus 的标准 JDBC 驱动。该驱动支持 `jdbc:milvus://` URL，将 SQL 转换为 `milvus-sdk-java` 调用，并可通过 `DriverManager` 加载。
 
 语法层面参考了 [dbvisitor](https://github.com/zycgit/dbvisitor) 的部分 Milvus SQL 语法。

@@ -122,6 +122,7 @@ Milvus 官方术语可参考：[数据库](https://milvus.io/docs/zh/manage_data
 - `DELETE FROM collection_name WHERE id = 1`
 - `SELECT 'keep alive'`
 - `SELECT * FROM collection_name`
+- `SELECT COUNT(*) AS total FROM collection_name`
 - `SELECT * FROM collection_name WHERE id < 10 LIMIT 5`
 - `SELECT t.* FROM vectordb.collection_name t`
 - `SELECT id, title FROM collection_name ORDER BY vector <-> [0.1, 0.2] LIMIT 10`

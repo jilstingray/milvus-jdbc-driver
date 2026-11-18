@@ -236,7 +236,7 @@ The driver execution layer requires either a scalar `WHERE` filter or a vector-s
 SELECT literal [, literal]...
 
 SELECT (* | qualifier.* | column [, column]...)
-FROM collection [alias]
+FROM collection [[AS] alias]
   [PARTITION partition]
   [WHERE expression]
   [ORDER BY sort_clause]
@@ -268,7 +268,13 @@ Scalar `SELECT` maps to Milvus query. Vector search is expressed with an `ORDER 
 
 ```sql
 COUNT FROM collection [PARTITION partition] [WHERE expression]
+
+SELECT COUNT(*) [[AS] alias]
+FROM collection [[AS] table_alias] [PARTITION partition] [WHERE expression]
+  [LIMIT integer] [OFFSET integer]
 ```
+
+For example: `SELECT COUNT(*) AS total FROM books WHERE id >= 1`. This maps to Milvus `count(*)` and returns one `BIGINT` column, named `count(*)` unless an alias is supplied. Database-qualified collections, partition filters and the connection's consistency setting are supported. `LIMIT` and `OFFSET` apply to the aggregate result row, not to the entities being counted. Count queries do not currently support `ORDER BY` or `WITH`.
 
 ## Load, Release, and Flush
 
@@ -335,14 +341,21 @@ expression OR expression
 identifier IN [value [, value]...]
 identifier IN (value [, value]...)
 identifier IN ?
+identifier NOT IN [value [, value]...]
+identifier NOT IN (value [, value]...)
 identifier LIKE 'pattern'
 identifier LIKE ?
+identifier NOT LIKE 'pattern'
+identifier IS NULL
+identifier IS NOT NULL
 term
 ```
 
 `AND` can also be written as `&&`; `OR` can also be written as `||`.
 
-The driver normalizes single equals (`=`) to Milvus equality (`==`) when converting filter text for Milvus query/search APIs.
+The driver converts `=` to `==`, `<>` to `!=`, and the value lists in `IN (...)` and `NOT IN (...)` to brackets for Milvus query/search APIs. Table alias prefixes are removed from projected fields, filter fields and sort fields. Both scalar queries and vector searches forward `PARTITION` and `OFFSET`; scalar `ORDER BY field [ASC | DESC]` is forwarded to the SDK.
+
+Unquoted identifiers do not include hyphens. Quote names containing hyphens with backticks, for example `` `book-items` ``, so that `score-1` can be parsed as subtraction.
 
 ## Literals
 

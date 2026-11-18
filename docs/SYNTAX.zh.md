@@ -236,7 +236,7 @@ LIMIT 10
 SELECT literal [, literal]...
 
 SELECT (* | qualifier.* | column [, column]...)
-FROM collection [alias]
+FROM collection [[AS] alias]
   [PARTITION partition]
   [WHERE expression]
   [ORDER BY sort_clause]
@@ -268,7 +268,13 @@ LIMIT 10
 
 ```sql
 COUNT FROM collection [PARTITION partition] [WHERE expression]
+
+SELECT COUNT(*) [[AS] alias]
+FROM collection [[AS] table_alias] [PARTITION partition] [WHERE expression]
+  [LIMIT integer] [OFFSET integer]
 ```
+
+例如：`SELECT COUNT(*) AS total FROM books WHERE id >= 1`。计数映射到 Milvus 的 `count(*)`，返回一列 `BIGINT`；无别名时列名为 `count(*)`。支持 `database.collection` 和分区过滤，使用连接的一致性设置。`LIMIT`、`OFFSET` 作用于聚合结果行，不会限制被统计的实体数量。计数查询暂不支持 `ORDER BY` 和 `WITH`。
 
 ## Load、Release 和 Flush
 
@@ -335,14 +341,21 @@ expression OR expression
 identifier IN [value [, value]...]
 identifier IN (value [, value]...)
 identifier IN ?
+identifier NOT IN [value [, value]...]
+identifier NOT IN (value [, value]...)
 identifier LIKE 'pattern'
 identifier LIKE ?
+identifier NOT LIKE 'pattern'
+identifier IS NULL
+identifier IS NOT NULL
 term
 ```
 
 `AND` 也可以写作 `&&`；`OR` 也可以写作 `||`。
 
-驱动在把过滤条件转换为 Milvus query/search API 文本时，会把单等号（`=`）规范化为 Milvus 等值操作符（`==`）。
+驱动在把过滤条件转换为 Milvus query/search API 文本时，会把 `=` 转换为 `==`、`<>` 转换为 `!=`，并把 `IN (...)`、`NOT IN (...)` 的值列表转换为方括号形式。带表别名的查询会移除投影字段、过滤字段和排序字段的别名前缀。标量查询及向量搜索均会传递 `PARTITION` 和 `OFFSET`，标量 `ORDER BY field [ASC | DESC]` 会传递给 SDK。
+
+未加引号的标识符不包含连字符；包含连字符的名称请使用反引号，例如 `` `book-items` ``。这样 `score-1` 可以按减法表达式解析。
 
 ## 字面量
 

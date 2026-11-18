@@ -75,10 +75,11 @@ load: LOAD TABLE collectionName=identifier (PARTITION partitionName=identifier)?
 release: RELEASE TABLE collectionName=identifier (PARTITION partitionName=identifier)?;
 flush: FLUSH collectionName=identifier;
 
-selectElements: STAR | qualifiedStar | identifierList;
+selectElements: STAR | qualifiedStar | countAggregate | identifierList;
+countAggregate: COUNT OPEN_PAREN STAR CLOSE_PAREN (AS? alias=identifier)?;
 constantSelectElements: literal (COMMA literal)*;
 qualifiedStar: qualifier=identifier STAR;
-tableRef: collectionName=identifier alias=identifier?;
+tableRef: collectionName=identifier (AS? alias=identifier)?;
 identifierList: identifier (COMMA identifier)*;
 
 sortClause: fieldName=identifier (ASC | DESC)? | fieldName=identifier distanceOperator vectorValue;
@@ -92,9 +93,11 @@ expression
     | expression (PLUS | MINUS) expression
     | expression (GT | LT | GTE | LTE) expression
     | expression (EQ | EQUALS | NE) expression
-    | expression (AND | OR) expression
-    | identifier IN (listLiteral | OPEN_PAREN literalList CLOSE_PAREN | ARG)
-    | identifier LIKE (STRING_LITERAL | ARG)
+    | expression AND expression
+    | expression OR expression
+    | identifier NOT? IN (listLiteral | OPEN_PAREN literalList CLOSE_PAREN | ARG)
+    | identifier NOT? LIKE (STRING_LITERAL | ARG)
+    | identifier IS NOT? NULL
     | term
     ;
 term: ARG | identifier | literal;

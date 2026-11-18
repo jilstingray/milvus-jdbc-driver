@@ -17,10 +17,17 @@
     <milvus.sdk.version>3.0.7</milvus.sdk.version>
     <slf4j.version>2.0.17</slf4j.version>
     <junit.version>5.10.3</junit.version>
+    <mockito.version>5.17.0</mockito.version>
     <maven.shade.plugin.version>3.6.0</maven.shade.plugin.version>
   </properties>
 
   <dependencies>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-core</artifactId>
+      <version>${mockito.version}</version>
+      <scope>test</scope>
+    </dependency>
     <dependency>
       <groupId>io.milvus</groupId>
       <artifactId>milvus-sdk-java</artifactId>
@@ -74,6 +81,9 @@
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
         <version>3.2.5</version>
+        <configuration>
+          <argLine>"-javaagent:${settings.localRepository}/org/mockito/mockito-core/${mockito.version}/mockito-core-${mockito.version}.jar"</argLine>
+        </configuration>
       </plugin>
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>

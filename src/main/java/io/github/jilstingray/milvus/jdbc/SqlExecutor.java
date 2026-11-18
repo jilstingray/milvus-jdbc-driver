@@ -50,6 +50,8 @@ import io.milvus.v2.service.vector.request.DeleteReq;
 import io.milvus.v2.service.vector.request.InsertReq;
 import io.milvus.v2.service.vector.request.QueryReq;
 import io.milvus.v2.service.vector.request.SearchReq;
+import io.milvus.v2.service.vector.request.aggregation.AggDirection;
+import io.milvus.v2.service.vector.request.aggregation.OrderByField;
 import io.milvus.v2.service.vector.request.data.FloatVec;
 import io.milvus.v2.service.vector.response.DeleteResp;
 import io.milvus.v2.service.vector.response.InsertResp;
@@ -284,16 +286,20 @@ final class SqlExecutor {
         return QueryResult.update(0);
     }
 
-    private QueryResult count(CollectionRef source, String filter) throws SQLException {
+    private QueryResult count(CollectionRef source, String partition, String filter, String label) throws SQLException {
         QueryReq.QueryReqBuilder builder =
             QueryReq.builder().databaseName(source.database).collectionName(source.collection).outputFields(List.of("count(*)"))
                 .filter(filterOrEmpty(filter));
+        if (partition != null) {
+            builder.partitionNames(List.of(partition));
+        }
+        builder.consistencyLevel(connection.consistencyLevel());
         QueryResp resp = connection.client().query(builder.build());
         List<Map<String, Object>> rows = new ArrayList<>();
         for (QueryResp.QueryResult result : resp.getQueryResults()) {
-            rows.add(new LinkedHashMap<>(result.getEntity()));
+            rows.add(row(label, result.getEntity().get("count(*)")));
         }
-        return QueryResult.rows(rows, List.of(new ColumnInfo("count(*)", java.sql.Types.BIGINT, "BIGINT")));
+        return QueryResult.rows(rows, List.of(new ColumnInfo(label, java.sql.Types.BIGINT, "BIGINT")));
     }
 
     private QueryResult upsert(CollectionRef source, List<String> fields, List<List<Object>> values) throws SQLException {
@@ -840,12 +846,17 @@ final class SqlExecutor {
 
     private QueryResult select(CollectionRef source, List<String> outputFields, SelectTail parsed) throws SQLException {
         List<ColumnInfo> schemaColumns = collectionColumns(source, outputFields);
+        if (parsed.limit == 0) {
+            return QueryResult.rows(List.of(), parsed.vectorField == null ? schemaColumns : searchColumns(schemaColumns));
+        }
         if (parsed.vectorField != null) {
             SearchReq.SearchReqBuilder builder = SearchReq.builder()
                 .databaseName(source.database)
                 .collectionName(source.collection)
                 .annsField(parsed.vectorField)
                 .data(List.of(new FloatVec(toFloatList(parsed.vectorValue))))
+                .partitionNames(parsed.partitions)
+                .offset(parsed.offset)
                 .limit(parsed.limit <= 0 ? 10 : parsed.limit)
                 .outputFields(outputFields)
                 .filter(filterOrEmpty(parsed.filter));
@@ -877,6 +888,9 @@ final class SqlExecutor {
             .databaseName(source.database)
             .collectionName(source.collection)
             .outputFields(outputFields)
+            .partitionNames(parsed.partitions)
+            .offset(parsed.offset)
+            .orderByFields(parsed.orderByFields)
             .filter(filterOrEmpty(parsed.filter));
         builder.limit(parsed.limit > 0 ? parsed.limit : connection.defaultQueryLimit());
         ConsistencyLevel level = connection.consistencyLevel();
@@ -1062,22 +1076,46 @@ final class SqlExecutor {
     }
 
     static String filterText(TokenStream tokens, org.antlr.v4.runtime.ParserRuleContext ctx) {
+        return filterText(tokens, ctx, null);
+    }
+
+    private static String filterText(TokenStream tokens, org.antlr.v4.runtime.ParserRuleContext ctx, String alias) {
         if (ctx == null) {
             return null;
         }
+        Map<Integer, String> replacements = new LinkedHashMap<>();
+        inListDelimiters(ctx, replacements);
         StringBuilder text = new StringBuilder();
         for (int i = ctx.getSourceInterval().a; i <= ctx.getSourceInterval().b; i++) {
             Token token = tokens.get(i);
             if (token.getType() == Token.EOF) {
                 break;
             }
-            String tokenText = token.getType() == MilvusJdbcParser.EQUALS ? "==" : token.getText();
+            String tokenText = token.getType() == MilvusJdbcParser.EQUALS ? "=="
+                : token.getType() == MilvusJdbcParser.NE ? "!="
+                : replacements.getOrDefault(i, token.getText());
+            if (alias != null && token.getType() == MilvusJdbcParser.IDENTIFIER && tokenText.startsWith(alias + ".")) {
+                tokenText = tokenText.substring(alias.length() + 1);
+            }
             if (text.length() > 0) {
                 text.append(' ');
             }
             text.append(tokenText);
         }
         return text.toString();
+    }
+
+    private static void inListDelimiters(org.antlr.v4.runtime.tree.ParseTree tree, Map<Integer, String> replacements) {
+        if (tree instanceof MilvusJdbcParser.ExpressionContext) {
+            MilvusJdbcParser.ExpressionContext expression = (MilvusJdbcParser.ExpressionContext) tree;
+            if (expression.IN() != null && expression.OPEN_PAREN() != null) {
+                replacements.put(expression.OPEN_PAREN().getSymbol().getTokenIndex(), "[");
+                replacements.put(expression.CLOSE_PAREN().getSymbol().getTokenIndex(), "]");
+            }
+        }
+        for (int i = 0; i < tree.getChildCount(); i++) {
+            inListDelimiters(tree.getChild(i), replacements);
+        }
     }
 
     private CollectionRef collectionRef(String name) throws SQLException {
@@ -1230,7 +1268,8 @@ final class SqlExecutor {
         public QueryResult visitCount(MilvusJdbcParser.CountContext ctx) {
             return unchecked(() -> {
                 CollectionRef source = collectionRef(identifier(ctx.collectionName));
-                return count(source, filterText(tokens, ctx.expression()));
+                return count(source, ctx.partitionName == null ? null : identifier(ctx.partitionName),
+                    filterText(tokens, ctx.expression()), "count(*)");
             });
         }
 
@@ -1381,21 +1420,46 @@ final class SqlExecutor {
             if (ctx.constantSelectElements() != null) {
                 return constantSelect(ctx.constantSelectElements());
             }
+            String alias = ctx.source.alias == null ? null : identifier(ctx.source.alias);
+            if (ctx.selectElements().countAggregate() != null) {
+                return unchecked(() -> {
+                    if (ctx.sortClause() != null || ctx.propertiesList() != null) {
+                        throw Unsupported.feature("COUNT(*) with ORDER BY or WITH");
+                    }
+                    MilvusJdbcParser.CountAggregateContext aggregate = ctx.selectElements().countAggregate();
+                    QueryResult result = count(collectionRef(identifier(ctx.source.collectionName)),
+                        ctx.partitionName == null ? null : identifier(ctx.partitionName),
+                        filterText(tokens, ctx.expression(), alias),
+                        aggregate.alias == null ? "count(*)" : identifier(aggregate.alias));
+                    // Pagination applies to the single aggregate row, not the counted entities.
+                    if ((ctx.limit != null && Long.parseLong(ctx.limit.getText()) == 0)
+                        || (ctx.offset != null && Long.parseLong(ctx.offset.getText()) > 0)) {
+                        return QueryResult.rows(List.of(), result.columns());
+                    }
+                    return result;
+                });
+            }
             SelectTail tail = new SelectTail(
-                filterText(tokens, ctx.expression()),
+                filterText(tokens, ctx.expression(), alias),
                 ctx.limit == null ? -1 : Long.parseLong(ctx.limit.getText()),
                 null,
                 null,
                 null
             );
+            tail.offset = ctx.offset == null ? 0 : Long.parseLong(ctx.offset.getText());
+            tail.partitions = ctx.partitionName == null ? List.of() : List.of(identifier(ctx.partitionName));
+            if (ctx.sortClause() != null && ctx.sortClause().distanceOperator() == null) {
+                tail.orderByFields = List.of(OrderByField.builder()
+                    .fieldName(stripAlias(identifier(ctx.sortClause().fieldName), alias))
+                    .direction(ctx.sortClause().DESC() == null ? AggDirection.ASC : AggDirection.DESC).build());
+            }
             if (ctx.sortClause() != null && ctx.sortClause().distanceOperator() != null) {
-                tail.vectorField = identifier(ctx.sortClause().fieldName);
+                tail.vectorField = stripAlias(identifier(ctx.sortClause().fieldName), alias);
                 tail.vectorOperator = ctx.sortClause().distanceOperator().getText();
                 tail.vectorValue = literal(ctx.sortClause().vectorValue().listLiteral());
             }
             return unchecked(() -> {
                 CollectionRef source = collectionRef(identifier(ctx.source.collectionName));
-                String alias = ctx.source.alias == null ? null : identifier(ctx.source.alias);
                 return select(source, selectFields(ctx.selectElements(), alias), tail);
             });
         }
@@ -1665,6 +1729,9 @@ final class SqlExecutor {
         String vectorField;
         String vectorOperator;
         Object vectorValue;
+        long offset;
+        List<String> partitions = List.of();
+        List<OrderByField> orderByFields = List.of();
 
         SelectTail(String filter, long limit, String vectorField, String vectorOperator, Object vectorValue) {
             this.filter = filter;

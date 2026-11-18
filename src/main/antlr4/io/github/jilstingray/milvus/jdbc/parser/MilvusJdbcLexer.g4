@@ -66,6 +66,7 @@ LOADING: L O A D I N G;
 OF: O F;
 OFFSET: O F F S E T;
 ASC: A S C;
+AS: A S;
 BOOL: B O O L;
 INT8: I N T '8';
 INT16: I N T '16';
@@ -130,7 +131,7 @@ FLOAT_LITERAL
     | [0-9]+ [eE] [+-]? [0-9]+
     ;
 INTEGER: [0-9]+;
-IDENTIFIER: BACKTICK_ID | QUOTED_ID | [a-zA-Z_] [a-zA-Z0-9_.-]*;
+IDENTIFIER: BACKTICK_ID | QUOTED_ID | [a-zA-Z_] [a-zA-Z0-9_.]*;
 
 SingleLineComment: '--' ~[\r\n]* -> skip;
 MultiLineComment: '/*' .*? '*/' -> skip;
